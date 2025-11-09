@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- MODEL PENGGUNA ---
+
+model Customer {
+  id        String       @id @default(cuid())
+  name      String
+  type      CustomerType @default(UMUM)
+  debt      Decimal      @default(0)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+enum CustomerType {
+  UMUM
+  TETAP
+  GROSIR
+}
+
+// --- MODEL PRODUK & STOK ---
+
+model Distributor {
+  id              String          @id @default(cuid())
+  name            String          @unique
+  products        Product[]
+  purchaseOrders  PurchaseOrder[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+model Product {
+  id              String                @id @default(cuid())
+  sku             String                @unique
+  name            String
+  stock           Int                   @default(0) // Stok dalam satuan terkecil
+  minStock        Int                   @default(10)
+  
+  distributor     Distributor           @relation(fields: [distributorId], references: [id])
+  distributorId   String
+
+  units           Unit[]                // Relasi: Satu produk punya banyak satuan
+  poItems         PurchaseOrderItem[]   // Relasi: Produk ini ada di banyak PO item
+
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+}
+
+model Unit {
+  id            String    @id @default(cuid())
+  name          String    // e.g., "Pcs", "Dus"
+  price         Decimal   // Harga jual satuan ini
+  conversion    Int       // e.g., 1 untuk Pcs, 40 untuk Dus
+  barcodes      String[]  // Array barcode
+
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId     String
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([productId, name]) // Produk tidak bisa punya 2 satuan "Pcs"
+}
+
+// --- MODEL PURCHASE ORDER (PO) ---
+
+model PurchaseOrder {
+  id            String    @id @default(cuid())
+  status        POStatus  @default(PENDING)
+  
+  distributor   Distributor @relation(fields: [distributorId], references: [id])
+  distributorId String
+  
+  items         PurchaseOrderItem[] // Relasi: Satu PO punya banyak item
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model PurchaseOrderItem {
+  id            String    @id @default(cuid())
+  qty           Int
+  unitName      String    // e.g., "Dus". Kita simpan sbg string (denormalisasi)
+  
+  po            PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  poId          String
+  
+  product       Product   @relation(fields: [productId], references: [id])
+  productId     String
+}
+
+enum POStatus {
+  PENDING
+  COMPLETED
+}

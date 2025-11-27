@@ -10,16 +10,33 @@ const app = express();
 
 // Middleware
 // CORS configuration - support environment variable untuk production
-const allowedOrigins = process.env.ALLOWED_ORIGINS 
-  ? (process.env.ALLOWED_ORIGINS === '*' ? true : process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()))
-  : true; // Default: allow all (untuk development)
-
-app.use(cors({
-  origin: allowedOrigins,
+// Default: allow all origins untuk development dan production
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, atau Railway internal)
+    if (!origin) return callback(null, true);
+    
+    // Allow all origins jika ALLOWED_ORIGINS tidak di-set atau set ke '*'
+    const allowedOrigins = process.env.ALLOWED_ORIGINS;
+    if (!allowedOrigins || allowedOrigins === '*') {
+      return callback(null, true);
+    }
+    
+    // Jika ada specific origins, check
+    const allowedList = allowedOrigins.split(',').map(o => o.trim());
+    if (allowedList.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Tetap allow untuk fleksibilitas
+    }
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range']
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '25mb' })); // Izinkan server membaca JSON body besar
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 

@@ -10,8 +10,9 @@
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:resolve": "prisma migrate resolve --applied",
     "db:seed": "node prisma/seed.js",
-    "railway:deploy": "prisma migrate deploy && npm run db:seed && node src/index.js"
+    "railway:deploy": "prisma migrate resolve --applied 20251127003136_add_store_model || true && prisma migrate deploy && npm run db:seed && node src/index.js"
   },
   "keywords": [],
   "author": "",

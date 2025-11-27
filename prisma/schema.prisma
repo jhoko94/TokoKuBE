@@ -7,13 +7,38 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// --- MODEL USER (Login & Akses) ---
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String   // Hash password
+  name      String
+  role      UserRole @default(KASIR)
+  isActive  Boolean  @default(true)
+  returPenjualanApproved ReturPenjualan[] // Retur yang disetujui oleh user ini
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum UserRole {
+  ADMIN
+  KASIR
+  MANAGER
+}
+
 // --- MODEL PENGGUNA ---
 
 model Customer {
   id        String       @id @default(cuid())
   name      String
   type      CustomerType @default(UMUM)
+  address   String?
+  phone     String?
+  email     String?
   debt      Decimal      @default(0)
+  transactions Transaction[]
+  returPenjualan ReturPenjualan[]
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 }
@@ -24,13 +49,50 @@ enum CustomerType {
   GROSIR
 }
 
+// --- MODEL GUDANG ---
+
+model Warehouse {
+  id          String        @id @default(cuid())
+  name        String        @unique
+  address     String?
+  isDefault   Boolean       @default(false) // Gudang utama
+  isActive    Boolean       @default(true)
+  stockItems  StockItem[]
+  stockHistory StockHistory[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+// --- MODEL STOK PER GUDANG ---
+
+model StockItem {
+  id          String    @id @default(cuid())
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  warehouseId String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId   String
+  stock       Int       @default(0) // Stok dalam satuan terkecil
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([warehouseId, productId])
+  @@index([warehouseId])
+  @@index([productId])
+}
+
 // --- MODEL PRODUK & STOK ---
 
 model Distributor {
   id              String          @id @default(cuid())
   name            String          @unique
+  address         String?
+  phone           String?
+  email           String?
+  contactPerson   String?
+  debt            Decimal         @default(0) // Hutang ke supplier
   products        Product[]
   purchaseOrders  PurchaseOrder[]
+  returPembelian  ReturPembelian[]
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 }
@@ -39,14 +101,22 @@ model Product {
   id              String                @id @default(cuid())
   sku             String                @unique
   name            String
-  stock           Int                   @default(0) // Stok dalam satuan terkecil
+  brand           String?
+  category        String?
+  notes           String?
+  stock           Int                   @default(0) // Stok total (untuk backward compatibility)
   minStock        Int                   @default(10)
   
   distributor     Distributor           @relation(fields: [distributorId], references: [id])
   distributorId   String
 
   units           Unit[]                // Relasi: Satu produk punya banyak satuan
+  stockItems      StockItem[]           // Relasi: Stok per gudang
   poItems         PurchaseOrderItem[]   // Relasi: Produk ini ada di banyak PO item
+  stockHistory    StockHistory[]        // Relasi: Riwayat perubahan stok
+  transactionItems TransactionItem[]    // Relasi: Produk ini ada di banyak transaksi
+  returPenjualanItems ReturPenjualanItem[]
+  returPembelianItems ReturPembelianItem[]
 
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
@@ -98,4 +168,183 @@ model PurchaseOrderItem {
 enum POStatus {
   PENDING
   COMPLETED
+}
+
+// --- MODEL RIWAYAT STOK ---
+
+model StockHistory {
+  id            String          @id @default(cuid())
+  product       Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId     String
+  warehouse     Warehouse?      @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  warehouseId   String?
+  
+  type          StockChangeType // Jenis perubahan stok
+  qtyChange     Int             // Perubahan jumlah (bisa positif atau negatif)
+  qtyBefore     Int             // Stok sebelum perubahan
+  qtyAfter      Int             // Stok setelah perubahan
+  unitName      String?         // Nama satuan yang digunakan (opsional)
+  note          String?         // Catatan/keterangan (opsional)
+  
+  // Reference untuk tracking (opsional)
+  referenceId   String?         // ID referensi (misal: PO ID, Transaction ID)
+  referenceType String?         // Tipe referensi (misal: "PO", "TRANSACTION", "OPNAME", "TRANSFER")
+  
+  createdAt     DateTime        @default(now())
+
+  @@index([productId, createdAt])
+  @@index([warehouseId])
+}
+
+enum StockChangeType {
+  IN            // Masuk (dari PO, opname, dll)
+  OUT           // Keluar (penjualan)
+  ADJUSTMENT    // Penyesuaian (opname)
+  RETURN_SALE   // Retur penjualan (barang kembali)
+  RETURN_PURCHASE // Retur pembelian (barang kembali ke supplier)
+  TRANSFER_IN   // Transfer masuk (dari gudang lain)
+  TRANSFER_OUT  // Transfer keluar (ke gudang lain)
+}
+
+// --- MODEL TRANSAKSI PENJUALAN ---
+
+model Transaction {
+  id            String            @id @default(cuid())
+  invoiceNumber String            @unique // Nomor invoice/nota
+  type          TransactionType   // LUNAS atau BON
+  customer      Customer          @relation(fields: [customerId], references: [id])
+  customerId    String
+  subtotal      Decimal           // Total sebelum diskon
+  discount      Decimal           @default(0) // Diskon total
+  total         Decimal           // Total setelah diskon
+  paid          Decimal           @default(0) // Uang yang dibayar
+  change        Decimal           @default(0) // Kembalian
+  note          String?
+  items         TransactionItem[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([customerId, createdAt])
+  @@index([invoiceNumber])
+}
+
+model TransactionItem {
+  id            String      @id @default(cuid())
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  transactionId String
+  product       Product     @relation(fields: [productId], references: [id])
+  productId     String
+  productName   String      // Denormalisasi untuk riwayat
+  unitName      String      // Satuan yang digunakan
+  qty           Int
+  price         Decimal     // Harga per unit saat transaksi
+  discount      Decimal     @default(0) // Diskon per item
+  subtotal      Decimal     // (price * qty) - discount
+}
+
+enum TransactionType {
+  LUNAS
+  BON
+}
+
+// --- MODEL RETUR PENJUALAN ---
+
+model ReturPenjualan {
+  id            String              @id @default(cuid())
+  invoiceNumber String              // Nomor invoice yang diretur
+  customer      Customer            @relation(fields: [customerId], references: [id])
+  customerId    String
+  total         Decimal             // Total retur
+  refundAmount  Decimal             // Uang yang dikembalikan
+  status        ReturStatus        @default(PENDING) // Status retur
+  approvedBy    User?               @relation(fields: [approvedById], references: [id])
+  approvedById   String?
+  approvedAt     DateTime?
+  rejectedReason String?            // Alasan penolakan jika ditolak
+  note          String?
+  items         ReturPenjualanItem[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([customerId, createdAt])
+  @@index([status])
+}
+
+enum ReturStatus {
+  PENDING     // Menunggu persetujuan
+  APPROVED    // Disetujui dan diproses
+  REJECTED    // Ditolak
+}
+
+model ReturPenjualanItem {
+  id              String        @id @default(cuid())
+  returPenjualan  ReturPenjualan @relation(fields: [returPenjualanId], references: [id], onDelete: Cascade)
+  returPenjualanId String
+  product         Product       @relation(fields: [productId], references: [id])
+  productId       String
+  productName     String
+  unitName        String
+  qty             Int
+  priceAtRetur    Decimal       // Harga saat retur
+  subtotal        Decimal
+}
+
+// --- MODEL RETUR PEMBELIAN ---
+
+model ReturPembelian {
+  id            String              @id @default(cuid())
+  poNumber      String              // Nomor PO yang diretur
+  distributor   Distributor         @relation(fields: [distributorId], references: [id])
+  distributorId String
+  total         Decimal
+  note          String?
+  items         ReturPembelianItem[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([distributorId, createdAt])
+}
+
+model ReturPembelianItem {
+  id              String        @id @default(cuid())
+  returPembelian  ReturPembelian @relation(fields: [returPembelianId], references: [id], onDelete: Cascade)
+  returPembelianId String
+  product         Product       @relation(fields: [productId], references: [id])
+  productId       String
+  productName     String
+  unitName        String
+  qty             Int
+  priceAtRetur    Decimal
+  subtotal        Decimal
+}
+
+// --- MODEL EMAIL QUOTA TRACKING ---
+
+model EmailQuota {
+  id        String   @id @default(cuid())
+  date      DateTime @unique @default(now()) // Tanggal (hanya tanggal, tanpa waktu)
+  count     Int      @default(0) // Jumlah email yang sudah dikirim hari ini
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([date])
+}
+
+// --- MODEL STORE (Informasi Toko) ---
+
+model Store {
+  id          String   @id @default(cuid())
+  name        String   // Nama toko
+  address     String?  // Alamat toko
+  phone       String?  // Telepon toko
+  email       String?  // Email toko
+  website     String?  // Website toko
+  npwp        String?  // NPWP
+  owner       String?  // Nama pemilik
+  description String?  // Deskripsi toko
+  logo        String?  // URL logo toko
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([id]) // Hanya satu record store
 }

@@ -10,43 +10,132 @@ const app = express();
 
 // Middleware
 app.use(cors()); // Izinkan semua origin (untuk development)
-app.use(express.json()); // Izinkan server membaca JSON body
+app.use(express.json({ limit: '25mb' })); // Izinkan server membaca JSON body besar
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // --- RUTE API ---
 // Kita akan impor rute-rute kita di sini
 const productRoutes = require('./routes/product.routes');
 const customerRoutes = require('./routes/customer.routes');
+const distributorRoutes = require('./routes/distributor.routes');
 const poRoutes = require('./routes/po.routes');
 const transactionRoutes = require('./routes/transaction.routes');
 const reportRoutes = require('./routes/report.routes');
+const returRoutes = require('./routes/retur.routes');
+const authRoutes = require('./routes/auth.routes');
+const userRoutes = require('./routes/user.routes');
+const exportRoutes = require('./routes/export.routes');
+const warehouseRoutes = require('./routes/warehouse.routes');
+const storeRoutes = require('./routes/store.routes');
 
+// Public routes
+app.use('/api/auth', authRoutes);
+
+// Protected routes
 app.use('/api/products', productRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/distributors', distributorRoutes);
 app.use('/api/purchase-orders', poRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/retur', returRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/export', exportRoutes);
+app.use('/api/warehouses', warehouseRoutes);
+app.use('/api/store', storeRoutes);
 
 // --- Endpoint Bootstrap (untuk memuat data awal FE) ---
 app.get('/api/bootstrap', async (req, res) => {
   try {
-    const [customers, products, distributors, pendingPOs] = await Promise.all([
-      prisma.customer.findMany({ orderBy: { name: 'asc' } }),
-      prisma.product.findMany({ 
-        include: { units: true }, 
+    // Optimasi: Hanya load data yang benar-benar diperlukan untuk dropdown/search
+    // Products dan POs tidak perlu di-load semua karena sudah ada pagination
+    const [customers, distributors, warehouses] = await Promise.all([
+      // Customers: hanya untuk dropdown di PageJualan (biasanya tidak terlalu banyak)
+      prisma.customer.findMany({ 
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          debt: true,
+        },
         orderBy: { name: 'asc' } 
       }),
-      prisma.distributor.findMany({ orderBy: { name: 'asc' } }),
-      prisma.purchaseOrder.findMany({
-        where: { status: 'PENDING' },
-        include: { 
-          distributor: true,
-          items: { include: { product: { include: { units: true } } } } // Ambil data produk lengkap
+      // Distributors: hanya untuk dropdown (biasanya tidak terlalu banyak)
+      prisma.distributor.findMany({ 
+        select: {
+          id: true,
+          name: true,
         },
-        orderBy: { createdAt: 'desc' }
+        orderBy: { name: 'asc' } 
+      }),
+      // Warehouses: hanya yang aktif (biasanya tidak terlalu banyak)
+      prisma.warehouse.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          name: true,
+          isDefault: true,
+        },
+        orderBy: [{ isDefault: 'desc' }, { name: 'asc' }]
       })
     ]);
-    res.json({ customers, products, distributors, pendingPOs });
+    
+    // Products: hanya load minimal data untuk dropdown/search (limit 100 untuk performa)
+    // Untuk tabel, gunakan pagination API
+    const products = await prisma.product.findMany({ 
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        distributorId: true,
+        units: {
+          select: {
+            id: true,
+            name: true,
+            conversion: true,
+          }
+        }
+      },
+      orderBy: { name: 'asc' },
+      take: 100 // Limit untuk performa
+    });
+    
+    // PendingPOs: hanya load minimal data (limit 10 untuk performa)
+    // Untuk daftar lengkap, gunakan pagination API
+    const pendingPOs = await prisma.purchaseOrder.findMany({
+        where: { status: 'PENDING' },
+        select: {
+          id: true,
+          createdAt: true,
+          distributor: {
+            select: {
+              id: true,
+              name: true,
+            }
+          },
+          items: {
+            select: {
+              id: true,
+              qty: true,
+              unitName: true,
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                  sku: true,
+                }
+              }
+            },
+            take: 5 // Limit items per PO untuk performa
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 10 // Limit POs untuk performa
+      });
+    
+    res.json({ customers, products, distributors, pendingPOs, warehouses });
   } catch (error) {
+    console.error('Bootstrap error:', error);
     res.status(500).json({ error: 'Gagal memuat data awal', details: error.message });
   }
 });
@@ -54,8 +143,11 @@ app.get('/api/bootstrap', async (req, res) => {
 
 // Global Error Handler (Sederhana)
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send('Terjadi kesalahan!');
+  console.error(err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    error: err.message || 'Terjadi kesalahan!',
+  });
 });
 
 const PORT = process.env.PORT || 3001;

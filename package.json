@@ -8,10 +8,7 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "prisma db seed"
-  },
-  "prisma": {
-    "seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js"
   },
   "keywords": [],
   "author": "",
@@ -19,9 +16,15 @@
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^6.19.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0"
+    "exceljs": "^4.4.0",
+    "express": "^5.1.0",
+    "jsbarcode": "^3.12.1",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^7.0.11",
+    "react-barcode": "^1.6.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.10",

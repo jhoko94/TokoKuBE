@@ -9,7 +9,15 @@ const prisma = new PrismaClient();
 const app = express();
 
 // Middleware
-app.use(cors()); // Izinkan semua origin (untuk development)
+// CORS configuration - support environment variable untuk production
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? (process.env.ALLOWED_ORIGINS === '*' ? true : process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()))
+  : true; // Default: allow all (untuk development)
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
 app.use(express.json({ limit: '25mb' })); // Izinkan server membaca JSON body besar
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 

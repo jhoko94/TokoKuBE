@@ -17,13 +17,26 @@ exports.getAllDistributors = async (req, res) => {
 
     const distributors = await prisma.distributor.findMany({
       where,
+      include: {
+        _count: {
+          select: {
+            products: true
+          }
+        }
+      },
       orderBy: { name: 'asc' },
       skip,
       take: limit,
     });
 
+    // Map hasil untuk include productCount
+    const distributorsWithCount = distributors.map(dist => ({
+      ...dist,
+      productCount: dist._count.products
+    }));
+
     res.json({
-      data: distributors,
+      data: distributorsWithCount,
       pagination: {
         page,
         limit,
@@ -79,10 +92,23 @@ exports.createDistributor = async (req, res) => {
         phone: phone || null,
         email: email || null,
         contactPerson: contactPerson || null,
+      },
+      include: {
+        _count: {
+          select: {
+            products: true
+          }
+        }
       }
     });
 
-    res.status(201).json(distributor);
+    // Map hasil untuk include productCount
+    const distributorWithCount = {
+      ...distributor,
+      productCount: distributor._count.products
+    };
+
+    res.status(201).json(distributorWithCount);
   } catch (error) {
     if (error.code === 'P2002') {
       return res.status(400).json({ error: 'Supplier dengan nama tersebut sudah ada' });
@@ -109,10 +135,23 @@ exports.updateDistributor = async (req, res) => {
         phone: phone || null,
         email: email || null,
         contactPerson: contactPerson || null,
+      },
+      include: {
+        _count: {
+          select: {
+            products: true
+          }
+        }
       }
     });
 
-    res.json(distributor);
+    // Map hasil untuk include productCount
+    const distributorWithCount = {
+      ...distributor,
+      productCount: distributor._count.products
+    };
+
+    res.json(distributorWithCount);
   } catch (error) {
     if (error.code === 'P2025') {
       return res.status(404).json({ error: 'Supplier tidak ditemukan' });
@@ -225,6 +264,64 @@ exports.payDebt = async (req, res) => {
     res.json(updatedDistributor);
   } catch (error) {
     res.status(500).json({ error: 'Gagal menyimpan pembayaran', details: error.message });
+  }
+};
+
+// DELETE /api/distributors/bulk - Bulk delete distributors
+exports.bulkDeleteDistributors = async (req, res) => {
+  const { ids } = req.body;
+
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ID supplier harus diisi' });
+  }
+
+  try {
+    // Cek semua distributor yang akan dihapus
+    const distributors = await prisma.distributor.findMany({
+      where: {
+        id: { in: ids }
+      },
+      include: {
+        products: true,
+        purchaseOrders: true,
+      }
+    });
+
+    if (distributors.length === 0) {
+      return res.status(404).json({ error: 'Tidak ada supplier yang ditemukan' });
+    }
+
+    // Cek apakah ada distributor yang punya produk atau PO
+    const distributorsWithProducts = distributors.filter(d => d.products.length > 0);
+    const distributorsWithPO = distributors.filter(d => d.purchaseOrders.length > 0);
+
+    if (distributorsWithProducts.length > 0) {
+      const names = distributorsWithProducts.map(d => d.name).join(', ');
+      return res.status(400).json({ 
+        error: `Tidak bisa menghapus supplier yang sudah memiliki produk: ${names}` 
+      });
+    }
+
+    if (distributorsWithPO.length > 0) {
+      const names = distributorsWithPO.map(d => d.name).join(', ');
+      return res.status(400).json({ 
+        error: `Tidak bisa menghapus supplier yang sudah memiliki purchase order: ${names}` 
+      });
+    }
+
+    // Hapus semua distributor yang valid
+    await prisma.distributor.deleteMany({
+      where: {
+        id: { in: ids }
+      }
+    });
+
+    res.json({ 
+      message: `Berhasil menghapus ${distributors.length} supplier`,
+      deletedCount: distributors.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menghapus supplier', details: error.message });
   }
 };
 

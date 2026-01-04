@@ -3,6 +3,9 @@ const router = express.Router();
 const userController = require('../controllers/user.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 
+// Public route untuk get roles (untuk dropdown, bisa diakses authenticated user)
+router.get('/roles', authenticate, userController.getAllRoles);
+
 // Semua route user memerlukan authentication dan hanya ADMIN yang bisa akses
 router.use(authenticate);
 router.use(authorize('ADMIN'));

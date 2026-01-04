@@ -4,6 +4,64 @@ const https = require('https');
 const http = require('http');
 const prisma = new PrismaClient();
 
+// Helper function untuk memastikan "Pelanggan Umum" selalu ada
+exports.ensureDefaultCustomer = async () => {
+  try {
+    // Cek apakah "Pelanggan Umum" sudah ada
+    let defaultCustomer = await prisma.customer.findFirst({
+      where: { name: 'Pelanggan Umum' },
+      include: { type: true }
+    });
+
+    if (!defaultCustomer) {
+      // Ambil CustomerType UMUM
+      const umumType = await prisma.customerType.findUnique({
+        where: { code: 'UMUM' }
+      });
+
+      if (!umumType) {
+        console.error('CustomerType UMUM tidak ditemukan!');
+        return null;
+      }
+
+      // Buat "Pelanggan Umum" jika belum ada
+      defaultCustomer = await prisma.customer.create({
+        data: {
+          name: 'Pelanggan Umum',
+          typeId: umumType.id,
+          address: null,
+          phone: null,
+          email: null,
+          debt: 0,
+        },
+        include: {
+          type: true,
+        }
+      });
+      console.log('✅ Default customer "Pelanggan Umum" created automatically');
+    } else {
+      // Pastikan type tetap UMUM (jika berubah, kembalikan ke UMUM)
+      const umumType = await prisma.customerType.findUnique({
+        where: { code: 'UMUM' }
+      });
+      
+      if (defaultCustomer.typeId !== umumType.id) {
+        defaultCustomer = await prisma.customer.update({
+          where: { id: defaultCustomer.id },
+          data: { typeId: umumType.id },
+          include: { type: true }
+        });
+        console.log('✅ Default customer "Pelanggan Umum" type corrected to UMUM');
+      }
+    }
+
+    return defaultCustomer;
+  } catch (error) {
+    console.error('Error ensuring default customer:', error);
+    return null;
+  }
+};
+
 // Setup email transporter (gunakan environment variables)
 const createTransporter = () => {
   // Jika tidak ada konfigurasi email, return null (email tidak akan dikirim)
@@ -31,6 +89,9 @@ const createTransporter = () => {
 // GET /api/customers - Get all customers dengan pagination
 exports.getAllCustomers = async (req, res) => {
   try {
+    // Pastikan "Pelanggan Umum" selalu ada
+    await ensureDefaultCustomer();
+
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 25;
     const search = req.query.search || '';
@@ -44,6 +105,9 @@ exports.getAllCustomers = async (req, res) => {
 
     const customers = await prisma.customer.findMany({
       where,
+      include: {
+        type: true,
+      },
       orderBy: { name: 'asc' },
       skip,
       take: limit,
@@ -70,6 +134,7 @@ exports.getCustomer = async (req, res) => {
     const customer = await prisma.customer.findUnique({
       where: { id },
       include: {
+        type: true,
         transactions: {
           orderBy: { createdAt: 'desc' },
           take: 10,
@@ -95,14 +160,40 @@ exports.createCustomer = async (req, res) => {
     return res.status(400).json({ error: 'Nama pelanggan harus diisi' });
   }
 
+  // Mencegah create customer dengan nama "Pelanggan Umum"
+  if (name.trim() === 'Pelanggan Umum') {
+    return res.status(400).json({ error: 'Nama "Pelanggan Umum" tidak bisa digunakan karena sudah menjadi default customer' });
+  }
+
   try {
+    // Get default type if not provided
+    let typeId = null;
+    if (type) {
+      const typeRecord = await prisma.customerType.findUnique({
+        where: { code: type.toUpperCase() }
+      });
+      if (!typeRecord) {
+        return res.status(400).json({ error: 'Tipe pelanggan tidak valid' });
+      }
+      typeId = typeRecord.id;
+    } else {
+      // Default to UMUM
+      const umumType = await prisma.customerType.findUnique({
+        where: { code: 'UMUM' }
+      });
+      typeId = umumType?.id;
+    }
+
     const customer = await prisma.customer.create({
       data: {
         name,
-        type: type || 'UMUM',
+        typeId: typeId,
         address: address || null,
         phone: phone || null,
         email: email || null,
+      },
+      include: {
+        type: true,
       }
     });
 
@@ -125,14 +216,49 @@ exports.updateCustomer = async (req, res) => {
   }
 
   try {
+    // Cek apakah ini adalah "Pelanggan Umum"
+    const existingCustomer = await prisma.customer.findUnique({
+      where: { id },
+      include: { type: true }
+    });
+
+    if (!existingCustomer) {
+      return res.status(404).json({ error: 'Pelanggan tidak ditemukan' });
+    }
+
+    // Lindungi "Pelanggan Umum" - tidak bisa diubah nama atau type
+    if (existingCustomer.name === 'Pelanggan Umum') {
+      if (name !== 'Pelanggan Umum') {
+        return res.status(400).json({ error: 'Nama "Pelanggan Umum" tidak bisa diubah' });
+      }
+      if (type && type.toUpperCase() !== 'UMUM') {
+        return res.status(400).json({ error: 'Tipe "Pelanggan Umum" harus tetap UMUM' });
+      }
+    }
+
+    // Get typeId if type is provided
+    let typeId = undefined;
+    if (type) {
+      const typeRecord = await prisma.customerType.findUnique({
+        where: { code: type.toUpperCase() }
+      });
+      if (!typeRecord) {
+        return res.status(400).json({ error: 'Tipe pelanggan tidak valid' });
+      }
+      typeId = typeRecord.id;
+    }
+
     const customer = await prisma.customer.update({
       where: { id },
       data: {
         name,
-        type,
+        ...(typeId !== undefined && { typeId }),
         address: address || null,
         phone: phone || null,
         email: email || null,
+      },
+      include: {
+        type: true,
       }
     });
 
@@ -160,6 +286,11 @@ exports.deleteCustomer = async (req, res) => {
 
     if (!customer) {
       return res.status(404).json({ error: 'Pelanggan tidak ditemukan' });
+    }
+
+    // Lindungi "Pelanggan Umum" - tidak bisa dihapus
+    if (customer.name === 'Pelanggan Umum') {
+      return res.status(400).json({ error: 'Pelanggan Umum tidak bisa dihapus karena merupakan default customer' });
     }
 
     if (customer.transactions.length > 0) {
@@ -205,6 +336,9 @@ exports.getCustomersWithDebt = async (req, res) => {
     // Get paginated customers
     const customers = await prisma.customer.findMany({
       where,
+      include: {
+        type: true,
+      },
       orderBy: { name: 'asc' },
       skip,
       take: limit,

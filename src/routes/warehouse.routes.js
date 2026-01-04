@@ -8,8 +8,8 @@ router.use(authenticate);
 
 router.get('/', warehouseController.getAllWarehouses);
 router.get('/:id', warehouseController.getWarehouse);
-router.post('/', authorize('ADMIN', 'MANAGER'), warehouseController.createWarehouse);
-router.put('/:id', authorize('ADMIN', 'MANAGER'), warehouseController.updateWarehouse);
+router.post('/', authorize('ADMIN', 'MANAGER', 'TESTER'), warehouseController.createWarehouse);
+router.put('/:id', authorize('ADMIN', 'MANAGER', 'TESTER'), warehouseController.updateWarehouse);
 router.delete('/:id', authorize('ADMIN'), warehouseController.deleteWarehouse);
 router.post('/transfer', warehouseController.transferStock);
 

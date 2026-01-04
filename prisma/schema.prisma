@@ -7,6 +7,43 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// --- LOOKUP TABLES ---
+
+model UserRole {
+  id          String   @id @default(cuid())
+  code        String   @unique // 'ADMIN', 'KASIR', 'MANAGER'
+  name        String   // 'Administrator', 'Kasir', 'Manager'
+  description String?
+  isActive    Boolean  @default(true)
+  users       User[]
+  permissions RoleMenuPermission[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CustomerType {
+  id          String    @id @default(cuid())
+  code        String    @unique // 'UMUM', 'TETAP', 'GROSIR'
+  name        String    // 'Pelanggan Umum', 'Pelanggan Tetap', 'Grosir'
+  canBon      Boolean   @default(false) // UMUM tidak bisa BON
+  description String?
+  isActive    Boolean   @default(true)
+  customers   Customer[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model TransactionType {
+  id            String        @id @default(cuid())
+  code          String        @unique // 'LUNAS', 'BON'
+  name          String        // 'Lunas', 'Bon'
+  description   String?
+  isActive      Boolean       @default(true)
+  transactions  Transaction[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
 // --- MODEL USER (Login & Akses) ---
 
 model User {
@@ -14,17 +51,14 @@ model User {
   username  String   @unique
   password  String   // Hash password
   name      String
-  role      UserRole @default(KASIR)
+  role      UserRole @relation(fields: [roleId], references: [id])
+  roleId    String
   isActive  Boolean  @default(true)
   returPenjualanApproved ReturPenjualan[] // Retur yang disetujui oleh user ini
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-}
 
-enum UserRole {
-  ADMIN
-  KASIR
-  MANAGER
+  @@index([roleId])
 }
 
 // --- MODEL PENGGUNA ---
@@ -32,7 +66,8 @@ enum UserRole {
 model Customer {
   id        String       @id @default(cuid())
   name      String
-  type      CustomerType @default(UMUM)
+  type      CustomerType @relation(fields: [typeId], references: [id])
+  typeId    String
   address   String?
   phone     String?
   email     String?
@@ -41,12 +76,8 @@ model Customer {
   returPenjualan ReturPenjualan[]
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
-}
 
-enum CustomerType {
-  UMUM
-  TETAP
-  GROSIR
+  @@index([typeId])
 }
 
 // --- MODEL GUDANG ---
@@ -83,18 +114,18 @@ model StockItem {
 // --- MODEL PRODUK & STOK ---
 
 model Distributor {
-  id              String          @id @default(cuid())
-  name            String          @unique
+  id              String                @id @default(cuid())
+  name            String                 @unique
   address         String?
   phone           String?
   email           String?
   contactPerson   String?
-  debt            Decimal         @default(0) // Hutang ke supplier
-  products        Product[]
+  debt            Decimal                @default(0) // Hutang ke supplier
+  products        ProductDistributor[]  // Many-to-Many dengan Product
   purchaseOrders  PurchaseOrder[]
   returPembelian  ReturPembelian[]
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
 }
 
 model Product {
@@ -104,11 +135,15 @@ model Product {
   brand           String?
   category        String?
   notes           String?
-  stock           Int                   @default(0) // Stok total (untuk backward compatibility)
+  stock           Int                   @default(0) // Stok total (calculated/sync)
   minStock        Int                   @default(10)
   
-  distributor     Distributor           @relation(fields: [distributorId], references: [id])
-  distributorId   String
+  // HAPUS: One-to-Many dengan Distributor
+  // distributor     Distributor           @relation(fields: [distributorId], references: [id])
+  // distributorId   String
+
+  // TAMBAH: Many-to-Many dengan Distributor
+  distributors    ProductDistributor[]  // Many-to-Many
 
   units           Unit[]                // Relasi: Satu produk punya banyak satuan
   stockItems      StockItem[]           // Relasi: Stok per gudang
@@ -122,12 +157,45 @@ model Product {
   updatedAt       DateTime              @updatedAt
 }
 
+// TAMBAH: Junction table untuk Many-to-Many Product ↔ Distributor
+model ProductDistributor {
+  id            String      @id @default(cuid())
+  productId     String
+  distributorId String
+  product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  distributor   Distributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+  stock         Int         @default(0) // Stok per supplier
+  isDefault     Boolean     @default(false) // Supplier utama
+  barcodes      Barcode[]   // Barcode per supplier
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  
+  @@unique([productId, distributorId])
+  @@index([productId])
+  @@index([distributorId])
+}
+
+// TAMBAH: Model Barcode terikat dengan ProductDistributor
+model Barcode {
+  id                  String              @id @default(cuid())
+  barcode             String              @unique // Nilai barcode (unik di seluruh sistem)
+  productDistributor  ProductDistributor  @relation(fields: [productDistributorId], references: [id], onDelete: Cascade)
+  productDistributorId String
+  unit                Unit                @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  unitId              String
+  createdAt           DateTime            @default(now())
+  
+  @@index([barcode]) // Index untuk pencarian cepat
+}
+
 model Unit {
   id            String    @id @default(cuid())
   name          String    // e.g., "Pcs", "Dus"
   price         Decimal   // Harga jual satuan ini
   conversion    Int       // e.g., 1 untuk Pcs, 40 untuk Dus
-  barcodes      String[]  // Array barcode
+  // HAPUS: barcodes      String[]  // Array barcode
+  // TAMBAH: Relasi ke Barcode
+  barcodes      Barcode[] // Relasi ke Barcode
 
   product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
   productId     String
@@ -142,7 +210,7 @@ model Unit {
 
 model PurchaseOrder {
   id            String    @id @default(cuid())
-  status        POStatus  @default(PENDING)
+  status        String    @default("PENDING") // 'PENDING', 'COMPLETED'
   
   distributor   Distributor @relation(fields: [distributorId], references: [id])
   distributorId String
@@ -151,6 +219,8 @@ model PurchaseOrder {
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  @@index([status])
 }
 
 model PurchaseOrderItem {
@@ -165,11 +235,6 @@ model PurchaseOrderItem {
   productId     String
 }
 
-enum POStatus {
-  PENDING
-  COMPLETED
-}
-
 // --- MODEL RIWAYAT STOK ---
 
 model StockHistory {
@@ -179,7 +244,7 @@ model StockHistory {
   warehouse     Warehouse?      @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
   warehouseId   String?
   
-  type          StockChangeType // Jenis perubahan stok
+  type          String          // Jenis perubahan stok: 'IN', 'OUT', 'ADJUSTMENT', 'RETURN_SALE', 'RETURN_PURCHASE', 'TRANSFER_IN', 'TRANSFER_OUT'
   qtyChange     Int             // Perubahan jumlah (bisa positif atau negatif)
   qtyBefore     Int             // Stok sebelum perubahan
   qtyAfter      Int             // Stok setelah perubahan
@@ -194,16 +259,7 @@ model StockHistory {
 
   @@index([productId, createdAt])
   @@index([warehouseId])
-}
-
-enum StockChangeType {
-  IN            // Masuk (dari PO, opname, dll)
-  OUT           // Keluar (penjualan)
-  ADJUSTMENT    // Penyesuaian (opname)
-  RETURN_SALE   // Retur penjualan (barang kembali)
-  RETURN_PURCHASE // Retur pembelian (barang kembali ke supplier)
-  TRANSFER_IN   // Transfer masuk (dari gudang lain)
-  TRANSFER_OUT  // Transfer keluar (ke gudang lain)
+  @@index([type])
 }
 
 // --- MODEL TRANSAKSI PENJUALAN ---
@@ -211,7 +267,8 @@ enum StockChangeType {
 model Transaction {
   id            String            @id @default(cuid())
   invoiceNumber String            @unique // Nomor invoice/nota
-  type          TransactionType   // LUNAS atau BON
+  type          TransactionType   @relation(fields: [typeId], references: [id])
+  typeId        String
   customer      Customer          @relation(fields: [customerId], references: [id])
   customerId    String
   subtotal      Decimal           // Total sebelum diskon
@@ -226,6 +283,7 @@ model Transaction {
 
   @@index([customerId, createdAt])
   @@index([invoiceNumber])
+  @@index([typeId])
 }
 
 model TransactionItem {
@@ -242,11 +300,6 @@ model TransactionItem {
   subtotal      Decimal     // (price * qty) - discount
 }
 
-enum TransactionType {
-  LUNAS
-  BON
-}
-
 // --- MODEL RETUR PENJUALAN ---
 
 model ReturPenjualan {
@@ -256,7 +309,7 @@ model ReturPenjualan {
   customerId    String
   total         Decimal             // Total retur
   refundAmount  Decimal             // Uang yang dikembalikan
-  status        ReturStatus        @default(PENDING) // Status retur
+  status        String              @default("PENDING") // 'PENDING', 'APPROVED', 'REJECTED'
   approvedBy    User?               @relation(fields: [approvedById], references: [id])
   approvedById   String?
   approvedAt     DateTime?
@@ -268,12 +321,6 @@ model ReturPenjualan {
 
   @@index([customerId, createdAt])
   @@index([status])
-}
-
-enum ReturStatus {
-  PENDING     // Menunggu persetujuan
-  APPROVED    // Disetujui dan diproses
-  REJECTED    // Ditolak
 }
 
 model ReturPenjualanItem {
@@ -347,4 +394,35 @@ model Store {
   updatedAt   DateTime @updatedAt
 
   @@unique([id]) // Hanya satu record store
+}
+
+// --- MODEL MENU ---
+model Menu {
+  id          String   @id @default(cuid())
+  code        String   @unique // 'MASTER_BARANG', 'PENJUALAN', dll
+  name        String   // 'Master Barang', 'Penjualan'
+  path        String   // '/master-barang', '/'
+  icon        String?  // Nama icon dari heroicons
+  category    String?  // 'MASTER_DATA', 'TRANSAKSI', 'STOK', dll
+  order       Int      @default(0) // Urutan menu
+  isActive    Boolean  @default(true)
+  permissions RoleMenuPermission[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// --- MODEL PERMISSION ROLE-MENU ---
+model RoleMenuPermission {
+  id          String   @id @default(cuid())
+  role        UserRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  roleId      String
+  menu        Menu     @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  menuId      String
+  canAccess   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([roleId, menuId])
+  @@index([roleId])
+  @@index([menuId])
 }

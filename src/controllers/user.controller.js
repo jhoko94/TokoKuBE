@@ -25,7 +25,13 @@ exports.getAllUsers = async (req, res) => {
         id: true,
         username: true,
         name: true,
-        role: true,
+        role: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
         isActive: true,
         createdAt: true,
         updatedAt: true,
@@ -58,7 +64,13 @@ exports.getUser = async (req, res) => {
         id: true,
         username: true,
         name: true,
-        role: true,
+        role: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
         isActive: true,
         createdAt: true,
         updatedAt: true,
@@ -78,7 +90,7 @@ exports.getUser = async (req, res) => {
 // POST /api/users - Create user (hanya ADMIN)
 exports.createUser = async (req, res) => {
   try {
-    const { username, password, name, role } = req.body;
+    const { username, password, name, role, isActive } = req.body;
 
     // Validasi
     if (!username || !username.trim()) {
@@ -90,9 +102,21 @@ exports.createUser = async (req, res) => {
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'Nama harus diisi' });
     }
-    if (!role || !['ADMIN', 'KASIR', 'MANAGER'].includes(role)) {
-      return res.status(400).json({ error: 'Role tidak valid' });
+    if (!role) {
+      return res.status(400).json({ error: 'Role harus dipilih' });
     }
+    
+    // Validasi role - bisa berupa code atau ID
+    let roleId = null;
+    // Cari role berdasarkan code
+    const roleRecord = await prisma.userRole.findUnique({
+      where: { code: role.toUpperCase() }
+    });
+    
+    if (!roleRecord) {
+      return res.status(400).json({ error: `Role "${role}" tidak ditemukan. Pastikan role sudah di-seed di database.` });
+    }
+    roleId = roleRecord.id;
 
     // Cek username sudah ada
     const existingUser = await prisma.user.findUnique({
@@ -112,13 +136,20 @@ exports.createUser = async (req, res) => {
         username: username.trim(),
         password: hashedPassword,
         name: name.trim(),
-        role: role,
+        roleId: roleId,
+        isActive: isActive !== undefined ? isActive : true,
       },
       select: {
         id: true,
         username: true,
         name: true,
-        role: true,
+        role: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
         isActive: true,
         createdAt: true,
       }
@@ -129,7 +160,26 @@ exports.createUser = async (req, res) => {
       user
     });
   } catch (error) {
-    res.status(500).json({ error: 'Gagal membuat user', details: error.message });
+    console.error('Error creating user:', error);
+    console.error('Error stack:', error.stack);
+    // Jika error dari Prisma, berikan pesan yang lebih jelas
+    if (error.code === 'P2002') {
+      return res.status(400).json({ error: 'Username sudah digunakan' });
+    }
+    if (error.code === 'P2003') {
+      return res.status(400).json({ error: 'Role tidak valid atau tidak ditemukan' });
+    }
+    // Log error detail untuk debugging
+    const errorMessage = error.message || 'Unknown error';
+    console.error('Full error details:', {
+      message: errorMessage,
+      code: error.code,
+      meta: error.meta
+    });
+    res.status(500).json({ 
+      error: 'Gagal membuat user', 
+      details: errorMessage 
+    });
   }
 };
 
@@ -142,8 +192,18 @@ exports.updateUser = async (req, res) => {
     if (name !== undefined && !name.trim()) {
       return res.status(400).json({ error: 'Nama tidak boleh kosong' });
     }
-    if (role !== undefined && !['ADMIN', 'KASIR', 'MANAGER'].includes(role)) {
-      return res.status(400).json({ error: 'Role tidak valid' });
+
+    // Validasi role - bisa berupa code atau ID
+    let roleId = undefined;
+    if (role !== undefined) {
+      const roleRecord = await prisma.userRole.findUnique({
+        where: { code: role.toUpperCase() }
+      });
+      
+      if (!roleRecord) {
+        return res.status(400).json({ error: 'Role tidak valid' });
+      }
+      roleId = roleRecord.id;
     }
 
     // Update user
@@ -151,14 +211,20 @@ exports.updateUser = async (req, res) => {
       where: { id: req.params.id },
       data: {
         ...(name && { name: name.trim() }),
-        ...(role && { role }),
+        ...(roleId !== undefined && { roleId }),
         ...(isActive !== undefined && { isActive }),
       },
       select: {
         id: true,
         username: true,
         name: true,
-        role: true,
+        role: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
         isActive: true,
         updatedAt: true,
       }
@@ -221,6 +287,20 @@ exports.resetPassword = async (req, res) => {
       return res.status(404).json({ error: 'User tidak ditemukan' });
     }
     res.status(500).json({ error: 'Gagal reset password', details: error.message });
+  }
+};
+
+// GET /api/user-roles - Get all roles
+exports.getAllRoles = async (req, res) => {
+  try {
+    const roles = await prisma.userRole.findMany({
+      where: { isActive: true },
+      orderBy: { code: 'asc' }
+    });
+
+    res.json({ roles });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mengambil data role', details: error.message });
   }
 };
 

@@ -6,13 +6,13 @@ const { authenticate, authorize } = require('../middleware/auth.middleware');
 // Retur Penjualan - Semua user bisa akses
 router.get('/penjualan', authenticate, returController.getAllReturPenjualan);
 router.post('/penjualan', authenticate, returController.createReturPenjualan);
-// Approve/Reject retur penjualan - Hanya ADMIN dan MANAGER
-router.put('/penjualan/:id/approve', authenticate, authorize('ADMIN', 'MANAGER'), returController.approveReturPenjualan);
-router.put('/penjualan/:id/reject', authenticate, authorize('ADMIN', 'MANAGER'), returController.rejectReturPenjualan);
+// Approve/Reject retur penjualan - Hanya ADMIN, MANAGER, dan TESTER
+router.put('/penjualan/:id/approve', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), returController.approveReturPenjualan);
+router.put('/penjualan/:id/reject', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), returController.rejectReturPenjualan);
 
-// Retur Pembelian - Hanya ADMIN dan MANAGER
-router.get('/pembelian', authenticate, authorize('ADMIN', 'MANAGER'), returController.getAllReturPembelian);
-router.post('/pembelian', authenticate, authorize('ADMIN', 'MANAGER'), returController.createReturPembelian);
+// Retur Pembelian - Hanya ADMIN, MANAGER, dan TESTER
+router.get('/pembelian', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), returController.getAllReturPembelian);
+router.post('/pembelian', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), returController.createReturPembelian);
 
 module.exports = router;
 

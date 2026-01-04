@@ -8,8 +8,8 @@ router.get('/name', storeController.getStoreName);
 
 // Protected routes - hanya user yang sudah login yang bisa akses
 router.get('/', authenticate, storeController.getStore);
-// Update store - Hanya ADMIN dan MANAGER
-router.put('/', authenticate, authorize('ADMIN', 'MANAGER'), storeController.updateStore);
+// Update store - Hanya ADMIN, MANAGER, dan TESTER
+router.put('/', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), storeController.updateStore);
 
 module.exports = router;
 

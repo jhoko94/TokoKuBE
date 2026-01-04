@@ -12,6 +12,8 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:migrate:resolve": "prisma migrate resolve --applied",
     "db:seed": "node prisma/seed.js",
+    "db:seed:products": "node prisma/seed-products-supplier.js",
+    "db:clear-and-seed:products": "node prisma/clear-and-seed-products.js",
     "railway:deploy": "prisma migrate resolve --applied 20251127003136_add_store_model || true && prisma migrate deploy && npm run db:seed && node src/index.js"
   },
   "keywords": [],

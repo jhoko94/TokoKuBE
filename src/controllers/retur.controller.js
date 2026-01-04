@@ -152,9 +152,12 @@ exports.createReturPenjualan = async (req, res) => {
     }
 
     // Cari semua user dengan role ADMIN atau MANAGER untuk validasi password
+    const adminRole = await prisma.userRole.findUnique({ where: { code: 'ADMIN' } });
+    const managerRole = await prisma.userRole.findUnique({ where: { code: 'MANAGER' } });
+    
     const adminUsers = await prisma.user.findMany({
       where: {
-        role: { in: ['ADMIN', 'MANAGER'] },
+        roleId: { in: [adminRole?.id, managerRole?.id].filter(Boolean) },
         isActive: true
       }
     });
@@ -186,7 +189,8 @@ exports.createReturPenjualan = async (req, res) => {
     // Proses retur dengan transaction
     const result = await prisma.$transaction(async (tx) => {
       // Cek role user yang membuat retur
-      const isAdminOrManager = userRole === 'ADMIN' || userRole === 'MANAGER';
+      const userRoleCode = userRole?.toUpperCase();
+      const isAdminOrManager = userRoleCode === 'ADMIN' || userRoleCode === 'MANAGER';
       
       // Buat retur penjualan dengan status
       // Jika dibuat oleh ADMIN/MANAGER atau KASIR dengan password benar, langsung APPROVED
@@ -534,8 +538,8 @@ exports.approveReturPenjualan = async (req, res) => {
       return res.status(404).json({ error: 'Retur penjualan tidak ditemukan' });
     }
 
-    if (retur.status !== 'PENDING') {
-      return res.status(400).json({ error: `Retur penjualan sudah ${retur.status === 'APPROVED' ? 'disetujui' : 'ditolak'}` });
+    if (retur.status.toUpperCase() !== 'PENDING') {
+      return res.status(400).json({ error: `Retur penjualan sudah ${retur.status.toUpperCase() === 'APPROVED' ? 'disetujui' : 'ditolak'}` });
     }
 
     // Proses approval dalam transaction
@@ -637,8 +641,8 @@ exports.rejectReturPenjualan = async (req, res) => {
       return res.status(404).json({ error: 'Retur penjualan tidak ditemukan' });
     }
 
-    if (retur.status !== 'PENDING') {
-      return res.status(400).json({ error: `Retur penjualan sudah ${retur.status === 'APPROVED' ? 'disetujui' : 'ditolak'}` });
+    if (retur.status.toUpperCase() !== 'PENDING') {
+      return res.status(400).json({ error: `Retur penjualan sudah ${retur.status.toUpperCase() === 'APPROVED' ? 'disetujui' : 'ditolak'}` });
     }
 
     const updatedRetur = await prisma.returPenjualan.update({

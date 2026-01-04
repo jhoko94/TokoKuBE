@@ -16,8 +16,8 @@ exports.processTransaction = async (req, res) => {
   const { type, customerId, cart, subtotal, discount, total, paid, change, note } = req.body;
 
   // Validasi input
-  if (!type || !['LUNAS', 'BON'].includes(type)) {
-    return res.status(400).json({ error: 'Tipe transaksi harus LUNAS atau BON' });
+  if (!type) {
+    return res.status(400).json({ error: 'Tipe transaksi harus diisi' });
   }
   if (!customerId) {
     return res.status(400).json({ error: 'Pelanggan harus dipilih' });
@@ -26,19 +26,30 @@ exports.processTransaction = async (req, res) => {
     return res.status(400).json({ error: 'Keranjang tidak boleh kosong' });
   }
 
+  // Get TransactionType
+  const transactionType = await prisma.transactionType.findUnique({
+    where: { code: type.toUpperCase() }
+  });
+  if (!transactionType) {
+    return res.status(400).json({ error: 'Tipe transaksi tidak valid' });
+  }
+
   // Validasi customer
-  const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+  const customer = await prisma.customer.findUnique({ 
+    where: { id: customerId },
+    include: { type: true }
+  });
   if (!customer) {
     return res.status(404).json({ error: 'Pelanggan tidak ditemukan' });
   }
 
-  // Validasi BON hanya untuk customer non-UMUM
-  if (type === 'BON' && customer.type === 'UMUM') {
-    return res.status(400).json({ error: 'Pelanggan UMUM tidak bisa melakukan transaksi BON' });
+  // Validasi BON hanya untuk customer yang bisa bon
+  if (type.toUpperCase() === 'BON' && !customer.type.canBon) {
+    return res.status(400).json({ error: 'Pelanggan tipe ini tidak bisa melakukan transaksi BON' });
   }
 
   try {
-    // 1. Validasi Stok
+    // 1. Validasi Stok per Supplier
     for (const item of cart) {
       if (!item.id || !item.qty || !item.conversion) {
         return res.status(400).json({ error: 'Data item tidak lengkap' });
@@ -46,15 +57,37 @@ exports.processTransaction = async (req, res) => {
       if (item.qty <= 0) {
         return res.status(400).json({ error: 'Jumlah item harus > 0' });
       }
+      if (!item.distributorId) {
+        return res.status(400).json({ error: 'Distributor ID tidak ditemukan di item' });
+      }
       
       const product = await prisma.product.findUnique({ where: { id: item.id } });
       if (!product) {
         return res.status(404).json({ error: `Produk dengan ID ${item.id} tidak ditemukan` });
       }
       
+      // Validasi stok dari supplier yang dipilih
+      const productDistributor = await prisma.productDistributor.findUnique({
+        where: {
+          productId_distributorId: {
+            productId: item.id,
+            distributorId: item.distributorId
+          }
+        },
+        include: { distributor: true }
+      });
+
+      if (!productDistributor) {
+        return res.status(400).json({ 
+          error: `Produk tidak tersedia dari supplier tersebut` 
+        });
+      }
+      
       const stockNeeded = item.qty * item.conversion;
-      if (product.stock < stockNeeded) {
-        return res.status(400).json({ error: `Stok ${product.name} tidak cukup. Stok tersedia: ${Math.floor(product.stock / item.conversion)} ${item.unitName || 'unit'}` });
+      if (productDistributor.stock < stockNeeded) {
+        return res.status(400).json({ 
+          error: `Stok dari supplier ${productDistributor.distributor.name} tidak cukup. Stok tersedia: ${Math.floor(productDistributor.stock / item.conversion)} ${item.unitName || 'unit'}` 
+        });
       }
     }
 
@@ -80,7 +113,7 @@ exports.processTransaction = async (req, res) => {
       const transaction = await tx.transaction.create({
         data: {
           invoiceNumber,
-          type,
+          typeId: transactionType.id,
           customerId,
           subtotal: calculatedSubtotal,
           discount: calculatedDiscount,
@@ -102,26 +135,48 @@ exports.processTransaction = async (req, res) => {
         },
         include: {
           items: true,
-          customer: true,
+          customer: {
+            include: { type: true }
+          },
+          type: true,
         }
       });
 
-      // Update stok dan simpan riwayat untuk setiap item
+      // Update stok per supplier dan sync ke Product
       for (const item of cart) {
-        const product = await tx.product.findUnique({ where: { id: item.id } });
-        if (!product) continue;
-
-        const stockToReduce = item.qty * item.conversion;
-        const qtyBefore = product.stock;
-        const qtyAfter = qtyBefore - stockToReduce;
-
-        // Update stok
-        await tx.product.update({
-          where: { id: item.id },
-          data: { stock: { decrement: stockToReduce } },
+        const productDistributor = await tx.productDistributor.findUnique({
+          where: {
+            productId_distributorId: {
+              productId: item.id,
+              distributorId: item.distributorId
+            }
+          },
+          include: { distributor: true }
         });
 
-        // Simpan riwayat stok
+        if (!productDistributor) continue;
+
+        const stockToReduce = item.qty * item.conversion;
+        const qtyBeforeSupplier = productDistributor.stock;
+        const qtyAfterSupplier = qtyBeforeSupplier - stockToReduce;
+
+        // Kurangi stok dari supplier yang dipilih
+        await tx.productDistributor.update({
+          where: { id: productDistributor.id },
+          data: { stock: { decrement: stockToReduce } }
+        });
+
+        // Sync kurangi stok total di Product
+        const product = await tx.product.findUnique({ where: { id: item.id } });
+        const qtyBefore = product.stock;
+        const qtyAfter = qtyBefore - stockToReduce;
+        
+        await tx.product.update({
+          where: { id: item.id },
+          data: { stock: { decrement: stockToReduce } }
+        });
+
+        // Simpan riwayat stok dengan info supplier
         await tx.stockHistory.create({
           data: {
             productId: item.id,
@@ -130,7 +185,7 @@ exports.processTransaction = async (req, res) => {
             qtyBefore,
             qtyAfter,
             unitName: item.unitName,
-            note: `Penjualan ${type} - ${item.name} - ${invoiceNumber}`,
+            note: `Penjualan ${type.toUpperCase()} - Supplier: ${productDistributor.distributor.name} - ${invoiceNumber}`,
             referenceType: 'TRANSACTION',
             referenceId: transaction.id,
           },
@@ -138,7 +193,7 @@ exports.processTransaction = async (req, res) => {
       }
 
       // 4. Jika BON, update utang pelanggan
-      if (type === 'BON') {
+      if (type.toUpperCase() === 'BON') {
         await tx.customer.update({
           where: { id: customerId },
           data: { debt: { increment: calculatedTotal } },
@@ -151,6 +206,7 @@ exports.processTransaction = async (req, res) => {
     // Ambil customer terbaru untuk sinkronisasi data (setelah transaction commit)
     const updatedCustomer = await prisma.customer.findUnique({
       where: { id: customerId },
+      include: { type: true },
       select: { id: true, name: true, type: true, debt: true }
     });
 
@@ -186,7 +242,10 @@ exports.getAllTransactions = async (req, res) => {
     const transactions = await prisma.transaction.findMany({
       where,
       include: {
-        customer: true,
+        customer: {
+          include: { type: true }
+        },
+        type: true,
         items: {
           include: {
             product: {
@@ -224,7 +283,10 @@ exports.getTransactionByInvoice = async (req, res) => {
     const transaction = await prisma.transaction.findUnique({
       where: { invoiceNumber },
       include: {
-        customer: true,
+        customer: {
+          include: { type: true }
+        },
+        type: true,
         items: {
           include: {
             product: true,

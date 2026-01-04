@@ -35,10 +35,14 @@ exports.getAllProducts = async (req, res) => {
       });
     }
 
-    // Filter by distributor
+    // Filter by distributor (Many-to-Many melalui ProductDistributor)
     if (distributorId) {
       whereConditions.push({
-        distributorId: distributorId
+        distributors: {
+          some: {
+            distributorId: distributorId
+          }
+        }
       });
     }
 
@@ -75,16 +79,63 @@ exports.getAllProducts = async (req, res) => {
     const products = await prisma.product.findMany({
       where,
       include: { 
-        units: true,
-        distributor: true // Include distributor data
+        units: {
+          include: {
+            barcodes: {
+              include: {
+                productDistributor: {
+                  include: {
+                    distributor: {
+                      select: {
+                        id: true,
+                        name: true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        distributors: {
+          include: {
+            distributor: {
+              select: {
+                id: true,
+                name: true
+              }
+            },
+            barcodes: {
+              include: {
+                unit: {
+                  select: {
+                    id: true,
+                    name: true
+                  }
+                }
+              }
+            }
+          }
+        }
       },
       orderBy: { name: 'asc' },
       skip,
       take: limit,
     });
 
+    // Tambahkan properti distributor (default) untuk setiap produk
+    const productsWithDistributor = products.map(product => {
+      // Cari distributor default (isDefault: true) atau ambil yang pertama
+      const defaultDistributor = product.distributors?.find(d => d.isDefault) || product.distributors?.[0];
+      
+      return {
+        ...product,
+        distributor: defaultDistributor?.distributor || null
+      };
+    });
+
     res.json({
-      data: products,
+      data: productsWithDistributor,
       pagination: {
         page,
         limit,
@@ -99,7 +150,7 @@ exports.getAllProducts = async (req, res) => {
 
 // POST /api/products (Master Barang - Buat Baru)
 exports.createProduct = async (req, res) => {
-  const { sku, name, distributorId, minStock, units, brand, category, notes } = req.body;
+  const { sku, name, distributorId, distributors, minStock, units, brand, category, notes } = req.body;
   
   // Validasi input
   if (!sku || !sku.trim()) {
@@ -108,9 +159,16 @@ exports.createProduct = async (req, res) => {
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Nama produk harus diisi' });
   }
-  if (!distributorId) {
-    return res.status(400).json({ error: 'Distributor harus dipilih' });
+  
+  // Handle backward compatibility: jika distributorId ada tapi distributors tidak, gunakan distributorId
+  const distributorsList = distributors && Array.isArray(distributors) && distributors.length > 0
+    ? distributors
+    : (distributorId ? [{ distributorId, isDefault: true }] : []);
+  
+  if (distributorsList.length === 0) {
+    return res.status(400).json({ error: 'Minimal harus ada 1 distributor' });
   }
+  
   if (!units || !Array.isArray(units) || units.length === 0) {
     return res.status(400).json({ error: 'Minimal harus ada 1 satuan' });
   }
@@ -131,35 +189,137 @@ exports.createProduct = async (req, res) => {
     }
   }
   
-  // Cek apakah distributor ada
-  const distributor = await prisma.distributor.findUnique({ where: { id: distributorId } });
-  if (!distributor) {
-    return res.status(400).json({ error: 'Distributor tidak ditemukan' });
+  // Validasi semua distributor ada
+  for (const dist of distributorsList) {
+    const distributor = await prisma.distributor.findUnique({ where: { id: dist.distributorId } });
+    if (!distributor) {
+      return res.status(400).json({ error: `Distributor dengan ID ${dist.distributorId} tidak ditemukan` });
+    }
+  }
+  
+  // Pastikan minimal ada 1 supplier default
+  const hasDefault = distributorsList.some(d => d.isDefault);
+  if (!hasDefault && distributorsList.length > 0) {
+    distributorsList[0].isDefault = true;
   }
   
   try {
-    const newProduct = await prisma.product.create({
-      data: {
-        sku: sku.trim(),
-        name: name.trim(),
-        distributorId,
-        brand,
-        category,
-        notes,
-        minStock: parseInt(minStock) || 0,
-        stock: 0, // Barang baru stoknya 0
-        units: {
-          create: units.map(unit => ({
-            name: unit.name.trim(),
-            price: parseFloat(unit.price),
-            conversion: parseInt(unit.conversion),
-            barcodes: Array.isArray(unit.barcodes) ? unit.barcodes.filter(b => b && b.trim()) : [],
-          })),
+    // Buat Product dan ProductDistributor dalam satu transaksi
+    const newProduct = await prisma.$transaction(async (tx) => {
+      // 1. Buat Product
+      const product = await tx.product.create({
+        data: {
+          sku: sku.trim(),
+          name: name.trim(),
+          brand,
+          category,
+          notes,
+          minStock: parseInt(minStock) || 0,
+          stock: 0, // Barang baru stoknya 0
+          units: {
+            create: units.map(unit => ({
+              name: unit.name.trim(),
+              price: parseFloat(unit.price),
+              conversion: parseInt(unit.conversion),
+              // HAPUS: barcodes (sekarang melalui Barcode model)
+            })),
+          },
         },
-      },
-      include: { units: true },
+        include: { units: true },
+      });
+
+      // 2. Buat ProductDistributor untuk setiap distributor (Many-to-Many)
+      for (const dist of distributorsList) {
+        const productDistributor = await tx.productDistributor.create({
+          data: {
+            productId: product.id,
+            distributorId: dist.distributorId,
+            stock: 0,
+            isDefault: dist.isDefault || false,
+          },
+        });
+        
+        // 3. Buat Barcode untuk setiap kombinasi (distributor + unit)
+        if (dist.barcodes && Array.isArray(dist.barcodes)) {
+          for (const barcodeData of dist.barcodes) {
+            const barcodeValue = typeof barcodeData === 'string' ? barcodeData : barcodeData.barcode;
+            const requestedUnitId = typeof barcodeData === 'object' ? barcodeData.unitId : null;
+            
+            if (!barcodeValue || !barcodeValue.trim()) continue;
+            
+            // Cari unit yang sesuai
+            let targetUnit = null;
+            if (requestedUnitId) {
+              // Jika ada unitId, cari berdasarkan id
+              targetUnit = product.units.find(u => u.id === requestedUnitId);
+            }
+            
+            // Jika tidak ditemukan atau tidak ada unitId, gunakan unit berdasarkan index atau conversion
+            if (!targetUnit) {
+              // Cari unit dengan conversion = 1 (satuan kecil) sebagai default
+              targetUnit = product.units.find(u => u.conversion === 1) || product.units[0];
+            }
+            
+            if (targetUnit) {
+              // Cek apakah barcode sudah ada (unik di seluruh sistem)
+              const existingBarcode = await tx.barcode.findUnique({
+                where: { barcode: barcodeValue.trim() }
+              });
+              
+              if (existingBarcode) {
+                // Skip jika barcode sudah ada (bisa jadi dari distributor lain atau unit lain)
+                // Atau bisa throw error jika ingin strict
+                continue;
+              }
+              
+              try {
+                await tx.barcode.create({
+                  data: {
+                    barcode: barcodeValue.trim(),
+                    productDistributorId: productDistributor.id,
+                    unitId: targetUnit.id,
+                  },
+                });
+              } catch (barcodeError) {
+                // Skip jika ada error (misalnya duplikat)
+                if (barcodeError.code !== 'P2002') {
+                  throw barcodeError;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      return product;
     });
-    res.status(201).json(newProduct);
+    
+    // Fetch ulang produk dengan include distributors untuk menambahkan properti distributor
+    const productWithDistributors = await prisma.product.findUnique({
+      where: { id: newProduct.id },
+      include: {
+        units: true,
+        distributors: {
+          include: {
+            distributor: {
+              select: {
+                id: true,
+                name: true
+              }
+            }
+          }
+        }
+      }
+    });
+    
+    // Tambahkan properti distributor (default)
+    const defaultDistributor = productWithDistributors.distributors?.find(d => d.isDefault) || productWithDistributors.distributors?.[0];
+    const productResponse = {
+      ...productWithDistributors,
+      distributor: defaultDistributor?.distributor || null
+    };
+    
+    res.status(201).json(productResponse);
   } catch (error) {
     if (error.code === 'P2002' && error.meta?.target.includes('sku')) {
       return res.status(400).json({ error: `SKU '${sku}' sudah ada.` });
@@ -171,7 +331,7 @@ exports.createProduct = async (req, res) => {
 // PUT /api/products/:id (Master Barang - Update)
 exports.updateProduct = async (req, res) => {
   const { id } = req.params;
-  const { sku, name, distributorId, minStock, units, brand, category, notes } = req.body;
+  const { sku, name, distributorId, distributors, minStock, units, brand, category, notes } = req.body;
   
   // Validasi input (sama seperti create)
   if (!sku || !sku.trim()) {
@@ -180,9 +340,16 @@ exports.updateProduct = async (req, res) => {
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Nama produk harus diisi' });
   }
-  if (!distributorId) {
-    return res.status(400).json({ error: 'Distributor harus dipilih' });
+  
+  // Handle backward compatibility: jika distributorId ada tapi distributors tidak, gunakan distributorId
+  const distributorsList = distributors && Array.isArray(distributors) && distributors.length > 0
+    ? distributors
+    : (distributorId ? [{ distributorId, isDefault: true }] : []);
+  
+  if (distributorsList.length === 0) {
+    return res.status(400).json({ error: 'Minimal harus ada 1 distributor' });
   }
+  
   if (!units || !Array.isArray(units) || units.length === 0) {
     return res.status(400).json({ error: 'Minimal harus ada 1 satuan' });
   }
@@ -204,44 +371,209 @@ exports.updateProduct = async (req, res) => {
   }
   
   // Cek apakah produk ada
-  const existingProduct = await prisma.product.findUnique({ where: { id } });
+  const existingProduct = await prisma.product.findUnique({ 
+    where: { id },
+    include: { distributors: true }
+  });
   if (!existingProduct) {
     return res.status(404).json({ error: 'Produk tidak ditemukan' });
   }
   
-  // Cek apakah distributor ada
-  const distributor = await prisma.distributor.findUnique({ where: { id: distributorId } });
-  if (!distributor) {
-    return res.status(400).json({ error: 'Distributor tidak ditemukan' });
+  // Validasi semua distributor ada
+  for (const dist of distributorsList) {
+    const distributor = await prisma.distributor.findUnique({ where: { id: dist.distributorId } });
+    if (!distributor) {
+      return res.status(400).json({ error: `Distributor dengan ID ${dist.distributorId} tidak ditemukan` });
+    }
+  }
+  
+  // Pastikan minimal ada 1 supplier default
+  const hasDefault = distributorsList.some(d => d.isDefault);
+  if (!hasDefault && distributorsList.length > 0) {
+    distributorsList[0].isDefault = true;
   }
   
   try {
-    // 1. Hapus unit lama (Prisma tidak bisa update-or-delete nested, jadi kita hapus dulu)
-    await prisma.unit.deleteMany({ where: { productId: id } });
+    // Update dalam transaksi untuk handle ProductDistributor
+    const updatedProduct = await prisma.$transaction(async (tx) => {
+      // 1. Hapus unit lama (Prisma tidak bisa update-or-delete nested, jadi kita hapus dulu)
+      await tx.unit.deleteMany({ where: { productId: id } });
 
-    // 2. Update produk dan buat unit baru
-    const updatedProduct = await prisma.product.update({
-      where: { id },
-      data: {
-        sku: sku.trim(),
-        name: name.trim(),
-        distributorId,
-        minStock: parseInt(minStock) || 0,
-        brand,
-        category,
-        notes,
-        units: {
-          create: units.map(unit => ({
-            name: unit.name.trim(),
-            price: parseFloat(unit.price),
-            conversion: parseInt(unit.conversion),
-            barcodes: Array.isArray(unit.barcodes) ? unit.barcodes.filter(b => b && b.trim()) : [],
-          })),
+      // 2. Update produk dan buat unit baru
+      const product = await tx.product.update({
+        where: { id },
+        data: {
+          sku: sku.trim(),
+          name: name.trim(),
+          minStock: parseInt(minStock) || 0,
+          brand,
+          category,
+          notes,
+          units: {
+            create: units.map(unit => ({
+              name: unit.name.trim(),
+              price: parseFloat(unit.price),
+              conversion: parseInt(unit.conversion),
+              // HAPUS: barcodes (sekarang melalui Barcode model)
+            })),
+          },
         },
-      },
-      include: { units: true },
+        include: { units: true },
+      });
+
+      // 3. Update ProductDistributor (Many-to-Many)
+      // Hapus semua ProductDistributor yang tidak ada di distributorsList
+      const existingDistributorIds = existingProduct.distributors.map(d => d.distributorId);
+      const newDistributorIds = distributorsList.map(d => d.distributorId);
+      const toRemove = existingDistributorIds.filter(id => !newDistributorIds.includes(id));
+      
+      // Hapus yang tidak ada lagi
+      for (const distributorIdToRemove of toRemove) {
+        await tx.productDistributor.deleteMany({
+          where: {
+            productId: id,
+            distributorId: distributorIdToRemove
+          }
+        });
+      }
+      
+      // Update atau buat ProductDistributor untuk setiap distributor di list
+      for (const dist of distributorsList) {
+        let productDistributor;
+        const existing = await tx.productDistributor.findUnique({
+          where: {
+            productId_distributorId: {
+              productId: id,
+              distributorId: dist.distributorId
+            }
+          }
+        });
+        
+        if (existing) {
+          // Update jika sudah ada
+          productDistributor = await tx.productDistributor.update({
+            where: { id: existing.id },
+            data: { isDefault: dist.isDefault || false }
+          });
+        } else {
+          // Buat baru jika belum ada
+          productDistributor = await tx.productDistributor.create({
+            data: {
+              productId: id,
+              distributorId: dist.distributorId,
+              stock: 0, // Stok baru default 0
+              isDefault: dist.isDefault || false
+            }
+          });
+        }
+        
+        // Update barcode untuk distributor ini
+        if (dist.barcodes && Array.isArray(dist.barcodes)) {
+          // Hapus barcode lama untuk kombinasi ini (jika ada)
+          const existingBarcodes = await tx.barcode.findMany({
+            where: {
+              productDistributorId: productDistributor.id
+            }
+          });
+          
+          // Hapus yang tidak ada di list baru
+          const newBarcodeValues = dist.barcodes.map(b => {
+            const barcodeValue = typeof b === 'string' ? b : (b?.barcode || b);
+            return barcodeValue.trim();
+          });
+          
+          for (const existingBarcode of existingBarcodes) {
+            if (!newBarcodeValues.includes(existingBarcode.barcode)) {
+              await tx.barcode.delete({
+                where: { id: existingBarcode.id }
+              });
+            }
+          }
+          
+          // Tambah barcode baru (yang belum ada)
+          for (const barcodeData of dist.barcodes) {
+            const barcodeValue = typeof barcodeData === 'string' ? barcodeData : barcodeData.barcode;
+            const unitId = typeof barcodeData === 'object' ? barcodeData.unitId : null;
+            
+            if (!barcodeValue || !barcodeValue.trim()) continue;
+            
+            // Cek apakah barcode sudah ada untuk kombinasi ini
+            const barcodeExists = await tx.barcode.findFirst({
+              where: {
+                barcode: barcodeValue.trim(),
+                productDistributorId: productDistributor.id
+              }
+            });
+            
+            if (!barcodeExists) {
+              // Cari unit yang sesuai
+              let targetUnit = null;
+              if (unitId) {
+                targetUnit = product.units.find(u => u.id === unitId);
+              }
+              
+              // Jika tidak ditemukan, gunakan unit dengan conversion = 1 (satuan kecil)
+              if (!targetUnit) {
+                targetUnit = product.units.find(u => u.conversion === 1) || product.units[0];
+              }
+              
+              if (targetUnit) {
+                // Cek apakah barcode sudah ada di sistem (unik constraint)
+                const existingBarcode = await tx.barcode.findUnique({
+                  where: { barcode: barcodeValue.trim() }
+                });
+                
+                if (!existingBarcode) {
+                  try {
+                    await tx.barcode.create({
+                      data: {
+                        barcode: barcodeValue.trim(),
+                        productDistributorId: productDistributor.id,
+                        unitId: targetUnit.id,
+                      },
+                    });
+                  } catch (barcodeError) {
+                    // Skip jika ada error (misalnya duplikat)
+                    if (barcodeError.code !== 'P2002') {
+                      throw barcodeError;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      return product;
     });
-    res.json(updatedProduct);
+    
+    // Fetch ulang produk dengan include distributors untuk menambahkan properti distributor
+    const productWithDistributors = await prisma.product.findUnique({
+      where: { id },
+      include: {
+        units: true,
+        distributors: {
+          include: {
+            distributor: {
+              select: {
+                id: true,
+                name: true
+              }
+            }
+          }
+        }
+      }
+    });
+    
+    // Tambahkan properti distributor (default)
+    const defaultDistributor = productWithDistributors.distributors?.find(d => d.isDefault) || productWithDistributors.distributors?.[0];
+    const productResponse = {
+      ...productWithDistributors,
+      distributor: defaultDistributor?.distributor || null
+    };
+    
+    res.json(productResponse);
   } catch (error) {
      if (error.code === 'P2002' && error.meta?.target.includes('sku')) {
       return res.status(400).json({ error: `SKU '${sku}' sudah ada.` });
@@ -258,6 +590,46 @@ exports.deleteProduct = async (req, res) => {
     res.status(204).send(); // No Content
   } catch (error) {
     res.status(500).json({ error: 'Gagal menghapus produk' });
+  }
+};
+
+// DELETE /api/products/bulk - Bulk delete products
+exports.bulkDeleteProducts = async (req, res) => {
+  const { ids } = req.body;
+
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ID produk harus diisi' });
+  }
+
+  try {
+    // Cek apakah semua produk ada
+    const products = await prisma.product.findMany({
+      where: {
+        id: { in: ids }
+      }
+    });
+
+    if (products.length === 0) {
+      return res.status(404).json({ error: 'Tidak ada produk yang ditemukan' });
+    }
+
+    if (products.length !== ids.length) {
+      return res.status(400).json({ error: 'Beberapa produk tidak ditemukan' });
+    }
+
+    // Hapus semua produk yang valid
+    await prisma.product.deleteMany({
+      where: {
+        id: { in: ids }
+      }
+    });
+
+    res.json({ 
+      message: `Berhasil menghapus ${products.length} produk`,
+      deletedCount: products.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menghapus produk', details: error.message });
   }
 };
 
@@ -280,21 +652,51 @@ exports.bulkUpdateDistributor = async (req, res) => {
   }
 
   try {
-    // Update semua produk yang dipilih
-    const result = await prisma.product.updateMany({
-      where: {
-        id: {
-          in: productIds
+    // Update ProductDistributor untuk semua produk yang dipilih
+    let updatedCount = 0;
+    
+    for (const productId of productIds) {
+      // Cari ProductDistributor default untuk produk ini
+      const existingProductDistributor = await prisma.productDistributor.findFirst({
+        where: { 
+          productId: productId,
+          isDefault: true 
         }
-      },
-      data: {
-        distributorId: distributorId
+      });
+
+      if (existingProductDistributor) {
+        // Update distributor default jika berbeda
+        if (existingProductDistributor.distributorId !== distributorId) {
+          await prisma.productDistributor.update({
+            where: { id: existingProductDistributor.id },
+            data: { distributorId: distributorId }
+          });
+          updatedCount++;
+        }
+      } else {
+        // Buat ProductDistributor jika belum ada
+        const product = await prisma.product.findUnique({
+          where: { id: productId },
+          select: { stock: true }
+        });
+        
+        if (product) {
+          await prisma.productDistributor.create({
+            data: {
+              productId: productId,
+              distributorId: distributorId,
+              stock: product.stock,
+              isDefault: true
+            }
+          });
+          updatedCount++;
+        }
       }
-    });
+    }
 
     res.json({
-      message: `Berhasil mengubah distributor untuk ${result.count} produk`,
-      updatedCount: result.count
+      message: `Berhasil mengubah distributor untuk ${updatedCount} produk`,
+      updatedCount: updatedCount
     });
   } catch (error) {
     console.error('Error in bulkUpdateDistributor:', error);
@@ -395,6 +797,41 @@ exports.bulkUpdateUnit = async (req, res) => {
   }
 };
 
+// PUT /api/products/bulk-update-minstock (Bulk Update Minimal Stok)
+exports.bulkUpdateMinStock = async (req, res) => {
+  const { productIds, minStock } = req.body;
+
+  // Validasi input
+  if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
+    return res.status(400).json({ error: 'Minimal harus ada 1 produk yang dipilih' });
+  }
+  if (minStock === undefined || minStock === null || minStock < 0) {
+    return res.status(400).json({ error: 'Stok minimum harus >= 0' });
+  }
+
+  try {
+    // Update semua produk yang dipilih
+    const result = await prisma.product.updateMany({
+      where: {
+        id: {
+          in: productIds
+        }
+      },
+      data: {
+        minStock: parseInt(minStock)
+      }
+    });
+
+    res.json({
+      message: `Berhasil mengubah minimal stok untuk ${result.count} produk`,
+      updatedCount: result.count
+    });
+  } catch (error) {
+    console.error('Error in bulkUpdateMinStock:', error);
+    res.status(500).json({ error: 'Gagal mengubah minimal stok', details: error.message });
+  }
+};
+
 // POST /api/products/:id/add-stock (Cek Barang - Tambah Stok)
 exports.addStock = async (req, res) => {
   const { id } = req.params;
@@ -454,46 +891,113 @@ exports.addStock = async (req, res) => {
   }
 };
 
+// GET /api/products/by-barcode/:barcode (Scan Barcode)
+exports.getProductByBarcode = async (req, res) => {
+  const { barcode } = req.params;
+  
+  try {
+    // Cari barcode dengan relasi ProductDistributor
+    const barcodeRecord = await prisma.barcode.findUnique({
+      where: { barcode },
+      include: {
+        productDistributor: {
+          include: {
+            product: {
+              include: { 
+                units: true 
+              }
+            },
+            distributor: true
+          }
+        },
+        unit: true
+      }
+    });
+
+    if (!barcodeRecord) {
+      return res.status(404).json({ error: 'Barcode tidak ditemukan' });
+    }
+
+    // Cek stok dari supplier yang terikat dengan barcode ini
+    const productDistributor = barcodeRecord.productDistributor;
+    if (productDistributor.stock <= 0) {
+      return res.status(400).json({ 
+        error: `Stok dari supplier ${productDistributor.distributor.name} tidak tersedia` 
+      });
+    }
+
+    res.json({
+      product: productDistributor.product,
+      unit: barcodeRecord.unit,
+      distributorId: productDistributor.distributorId, // Supplier yang terikat
+      stockFromSupplier: productDistributor.stock // Stok dari supplier ini
+    });
+  } catch (error) {
+    console.error('Error getProductByBarcode:', error);
+    res.status(500).json({ 
+      error: 'Gagal mencari produk berdasarkan barcode',
+      details: error.message
+    });
+  }
+};
+
 // GET /api/products/suggestions (Pesan Barang - Saran PO)
 exports.getPOSuggestions = async (req, res) => {
   const { distributorId, page = 1, limit = 25 } = req.query;
+  
   if (!distributorId) {
-    return res.status(400).json({ error: 'Distributor ID diperlukan' });
+    return res.status(400).json({ error: 'distributorId harus diisi' });
   }
+  
   try {
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Query untuk mendapatkan produk dengan stok <= minStock
-    // Kita perlu menggunakan raw query atau filter manual karena Prisma tidak support
-    // perbandingan langsung antara dua field
-    const allProducts = await prisma.product.findMany({
+    // 1. Cari ProductDistributor untuk distributor ini
+    const productDistributors = await prisma.productDistributor.findMany({
       where: {
-        distributorId: distributorId,
+        distributorId
       },
-      include: { units: true },
+      include: {
+        product: {
+          include: { units: true }
+        },
+        distributor: true
+      }
     });
 
-    // Filter manual: stock <= minStock
-    const filteredProducts = allProducts.filter(p => p.stock <= p.minStock);
-    
-    // Apply pagination
-    const total = filteredProducts.length;
-    const suggestions = filteredProducts.slice(skip, skip + limitNum);
+    // 2. Filter manual: stock <= product.minStock
+    const filtered = productDistributors.filter(pd => pd.stock <= pd.product.minStock);
+
+    // 3. Map ke format suggestions
+    const suggestions = filtered.map(pd => ({
+      ...pd.product,
+      stockFromSupplier: pd.stock, // Stok dari supplier ini
+      totalStock: pd.product.stock, // Stok total
+      isDefaultSupplier: pd.isDefault,
+      priority: pd.isDefault ? 'HIGH' : 'NORMAL'
+    }));
+
+    // 4. Apply pagination
+    const total = suggestions.length;
+    const paginatedSuggestions = suggestions.slice(skip, skip + limitNum);
 
     res.json({
-      data: suggestions,
+      data: paginatedSuggestions,
       pagination: {
         page: pageNum,
         limit: limitNum,
         total,
-        totalPages: Math.ceil(total / limitNum),
+        totalPages: Math.ceil(total / limitNum)
       }
     });
   } catch (error) {
-    console.error('Error in getPOSuggestions:', error);
-    res.status(500).json({ error: 'Gagal mengambil saran PO', details: error.message });
+    console.error('Error getPOSuggestions:', error);
+    res.status(500).json({ 
+      error: 'Gagal mengambil saran PO',
+      details: error.message
+    });
   }
 };
 

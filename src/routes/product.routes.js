@@ -6,29 +6,38 @@ const { authenticate, authorize } = require('../middleware/auth.middleware');
 // (GET /api/products) - Ambil semua produk (Semua user bisa akses untuk melihat)
 router.get('/', authenticate, productController.getAllProducts);
 
-// (POST /api/products) - Buat produk baru (Master Barang) - Hanya ADMIN dan MANAGER
-router.post('/', authenticate, authorize('ADMIN', 'MANAGER'), productController.createProduct);
+// (POST /api/products) - Buat produk baru (Master Barang) - Hanya ADMIN, MANAGER, dan TESTER
+router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.createProduct);
 
-// (POST /api/products/import) - Import produk dari template - Hanya ADMIN dan MANAGER
-router.post('/import', authenticate, authorize('ADMIN', 'MANAGER'), productController.importProducts);
+// (POST /api/products/import) - Import produk dari template - Hanya ADMIN, MANAGER, dan TESTER
+router.post('/import', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.importProducts);
 
-// (PUT /api/products/bulk-update-distributor) - Bulk update distributor - Hanya ADMIN dan MANAGER
-router.put('/bulk-update-distributor', authenticate, authorize('ADMIN', 'MANAGER'), productController.bulkUpdateDistributor);
+// (PUT /api/products/bulk-update-distributor) - Bulk update distributor - Hanya ADMIN, MANAGER, dan TESTER
+router.put('/bulk-update-distributor', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.bulkUpdateDistributor);
 
-// (PUT /api/products/bulk-update-unit) - Bulk update satuan kecil/besar - Hanya ADMIN dan MANAGER
-router.put('/bulk-update-unit', authenticate, authorize('ADMIN', 'MANAGER'), productController.bulkUpdateUnit);
+// (PUT /api/products/bulk-update-unit) - Bulk update satuan kecil/besar - Hanya ADMIN, MANAGER, dan TESTER
+router.put('/bulk-update-unit', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.bulkUpdateUnit);
 
-// (PUT /api/products/:id) - Update produk (Master Barang) - Hanya ADMIN dan MANAGER
-router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER'), productController.updateProduct);
+// (PUT /api/products/bulk-update-minstock) - Bulk update minimal stok - Hanya ADMIN, MANAGER, dan TESTER
+router.put('/bulk-update-minstock', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.bulkUpdateMinStock);
 
-// (DELETE /api/products/:id) - Hapus produk (Master Barang) - Hanya ADMIN dan MANAGER
-router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER'), productController.deleteProduct);
+// (DELETE /api/products/bulk) - Bulk delete products - HARUS SEBELUM /:id agar tidak tertangkap sebagai parameter
+router.delete('/bulk', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.bulkDeleteProducts);
 
-// (GET /api/products/suggestions) - Saran PO (Pesan Barang) - Hanya ADMIN dan MANAGER
-router.get('/suggestions', authenticate, authorize('ADMIN', 'MANAGER'), productController.getPOSuggestions);
+// (PUT /api/products/:id) - Update produk (Master Barang) - Hanya ADMIN, MANAGER, dan TESTER
+router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.updateProduct);
 
-// (POST /api/products/:id/add-stock) - Tambah Stok (Cek Barang) - Hanya ADMIN dan MANAGER
-router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER'), productController.addStock);
+// (DELETE /api/products/:id) - Hapus produk (Master Barang) - Hanya ADMIN, MANAGER, dan TESTER
+router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.deleteProduct);
+
+// (GET /api/products/by-barcode/:barcode) - Scan Barcode - Semua user bisa akses
+router.get('/by-barcode/:barcode', authenticate, productController.getProductByBarcode);
+
+// (GET /api/products/suggestions) - Saran PO (Pesan Barang) - Hanya ADMIN, MANAGER, dan TESTER
+router.get('/suggestions', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.getPOSuggestions);
+
+// (POST /api/products/:id/add-stock) - Tambah Stok (Cek Barang) - Hanya ADMIN, MANAGER, dan TESTER
+router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER', 'TESTER'), productController.addStock);
 
 // (GET /api/products/:id/stock-card) - Kartu Stok (Cek Barang) - Semua user bisa akses
 router.get('/:id/stock-card', authenticate, productController.getStockCard);

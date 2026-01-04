@@ -10,7 +10,9 @@ exports.getPendingPOs = async (req, res) => {
     const status = req.query.status || 'PENDING'; // Default PENDING, bisa COMPLETED
     const distributorId = req.query.distributorId || '';
 
-    const where = { status };
+    const where = { 
+      status: status.toUpperCase() // Ensure uppercase
+    };
     if (distributorId) {
       where.distributorId = distributorId;
     }
@@ -98,7 +100,7 @@ exports.createPO = async (req, res) => {
     const newPO = await prisma.purchaseOrder.create({
       data: {
         distributorId,
-        status: 'PENDING',
+        status: 'PENDING', // String, not enum
         items: {
           create: items.map(item => ({
             productId: item.productId,
@@ -156,13 +158,41 @@ exports.receivePO = async (req, res) => {
         const qtyBefore = product.stock;
         const qtyAfter = qtyBefore + stockToAdd;
 
-        // Update stok
+        // 1. Cari atau buat ProductDistributor untuk supplier PO ini
+        let productDistributor = await tx.productDistributor.findUnique({
+          where: {
+            productId_distributorId: {
+              productId: product.id,
+              distributorId: po.distributorId
+            }
+          }
+        });
+
+        if (!productDistributor) {
+          // Buat ProductDistributor baru jika belum ada
+          productDistributor = await tx.productDistributor.create({
+            data: {
+              productId: product.id,
+              distributorId: po.distributorId,
+              stock: 0,
+              isDefault: false
+            }
+          });
+        }
+
+        // 2. Update stok per supplier
+        await tx.productDistributor.update({
+          where: { id: productDistributor.id },
+          data: { stock: { increment: stockToAdd } }
+        });
+
+        // 3. Sync stok total di Product
         await tx.product.update({
           where: { id: product.id },
           data: { stock: { increment: stockToAdd } },
         });
 
-        // Simpan riwayat stok
+        // 4. Simpan riwayat stok
         await tx.stockHistory.create({
           data: {
             productId: product.id,
@@ -177,17 +207,26 @@ exports.receivePO = async (req, res) => {
           },
         });
 
-        // Cek barcode baru
+        // 5. Simpan barcode baru (jika ada) - TERIKAT DENGAN SUPPLIER
         if (newBarcodeData && typeof newBarcodeData === 'object' && newBarcodeData[product.id]) {
           const productBarcodes = newBarcodeData[product.id];
           if (productBarcodes && typeof productBarcodes === 'object') {
-            for (const unit of product.units) {
-              const newBarcode = productBarcodes[unit.id];
-              // Jika ada barcode baru DAN barcode itu belum ada di list DAN tidak kosong
-              if (newBarcode && typeof newBarcode === 'string' && newBarcode.trim() && !unit.barcodes.includes(newBarcode.trim())) {
-                await tx.unit.update({
-                  where: { id: unit.id },
-                  data: { barcodes: { push: newBarcode.trim() } }, // Tambahkan ke array
+            const newBarcode = productBarcodes[unit.id];
+            // Jika ada barcode baru DAN barcode itu belum ada di list DAN tidak kosong
+            if (newBarcode && typeof newBarcode === 'string' && newBarcode.trim()) {
+              // Cek apakah barcode sudah ada
+              const existingBarcode = await tx.barcode.findUnique({
+                where: { barcode: newBarcode.trim() }
+              });
+
+              if (!existingBarcode) {
+                // Simpan barcode TERIKAT DENGAN ProductDistributor ini
+                await tx.barcode.create({
+                  data: {
+                    barcode: newBarcode.trim(),
+                    productDistributorId: productDistributor.id,
+                    unitId: unit.id
+                  }
                 });
               }
             }
@@ -198,7 +237,7 @@ exports.receivePO = async (req, res) => {
       // 2. Update status PO jadi COMPLETED
       await tx.purchaseOrder.update({
         where: { id },
-        data: { status: 'COMPLETED' },
+        data: { status: 'COMPLETED' }, // String, not enum
       });
     });
     res.status(200).json({ message: 'PO berhasil diterima' });

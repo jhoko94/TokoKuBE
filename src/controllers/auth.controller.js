@@ -14,7 +14,10 @@ exports.login = async (req, res) => {
 
     // Cari user
     const user = await prisma.user.findUnique({
-      where: { username: username.trim() }
+      where: { username: username.trim() },
+      include: {
+        role: true,
+      }
     });
 
     if (!user) {
@@ -25,15 +28,40 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'Akun tidak aktif' });
     }
 
+    // Handle case dimana user mungkin belum punya roleId (data lama)
+    if (!user.role) {
+      // Jika user tidak punya role, set default ke KASIR
+      const defaultRole = await prisma.userRole.findUnique({
+        where: { code: 'KASIR' }
+      });
+      
+      if (defaultRole) {
+        // Update user dengan default role
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { roleId: defaultRole.id }
+        });
+        
+        // Reload user dengan role
+        user = await prisma.user.findUnique({
+          where: { id: user.id },
+          include: { role: true }
+        });
+      } else {
+        return res.status(500).json({ error: 'Role default tidak ditemukan. Silakan jalankan seed database.' });
+      }
+    }
+
     // Verifikasi password
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Username atau password salah' });
     }
 
-    // Generate JWT token
+    // Generate JWT token (use role code for backward compatibility)
+    const roleCode = user.role?.code || null;
     const token = jwt.sign(
-      { userId: user.id, username: user.username, role: user.role },
+      { userId: user.id, username: user.username, role: roleCode },
       process.env.JWT_SECRET || 'your-secret-key-change-in-production',
       { expiresIn: '24h' }
     );
@@ -46,7 +74,11 @@ exports.login = async (req, res) => {
         id: user.id,
         username: user.username,
         name: user.name,
-        role: user.role,
+        role: {
+          id: user.role?.id,
+          code: roleCode,
+          name: user.role?.name,
+        },
       }
     });
   } catch (error) {
@@ -59,11 +91,29 @@ exports.getMe = async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { id: true, username: true, name: true, role: true, isActive: true, createdAt: true }
+      select: { 
+        id: true, 
+        username: true, 
+        name: true, 
+        role: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+        isActive: true, 
+        createdAt: true 
+      }
     });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User tidak ditemukan' });
+    }
 
     res.json({ user });
   } catch (error) {
+    console.error('Error in getMe:', error);
     res.status(500).json({ error: 'Gagal mengambil data user', details: error.message });
   }
 };
@@ -81,7 +131,23 @@ exports.updateProfile = async (req, res) => {
     const updatedUser = await prisma.user.update({
       where: { id: req.user.id },
       data: { name: name.trim() },
-      select: { id: true, username: true, name: true, role: true, isActive: true, createdAt: true }
+      include: {
+        role: true,
+      },
+      select: { 
+        id: true, 
+        username: true, 
+        name: true, 
+        role: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+        isActive: true, 
+        createdAt: true 
+      }
     });
 
     res.json({ 

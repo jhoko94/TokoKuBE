@@ -54,6 +54,7 @@ const userRoutes = require('./routes/user.routes');
 const exportRoutes = require('./routes/export.routes');
 const warehouseRoutes = require('./routes/warehouse.routes');
 const storeRoutes = require('./routes/store.routes');
+const menuRoutes = require('./routes/menu.routes');
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -70,14 +71,20 @@ app.use('/api/users', userRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/warehouses', warehouseRoutes);
 app.use('/api/store', storeRoutes);
+app.use('/api/menus', menuRoutes);
 
 // --- Endpoint Bootstrap (untuk memuat data awal FE) ---
 app.get('/api/bootstrap', async (req, res) => {
   try {
+    // Pastikan "Pelanggan Umum" selalu ada
+    const customerController = require('./controllers/customer.controller');
+    await customerController.ensureDefaultCustomer();
+
     // Optimasi: Hanya load data yang benar-benar diperlukan untuk dropdown/search
     // Products dan POs tidak perlu di-load semua karena sudah ada pagination
     const [customers, distributors, warehouses] = await Promise.all([
       // Customers: hanya untuk dropdown di PageJualan (biasanya tidak terlalu banyak)
+      // Pastikan "Pelanggan Umum" di posisi pertama
       prisma.customer.findMany({ 
         select: {
           id: true,
@@ -85,13 +92,26 @@ app.get('/api/bootstrap', async (req, res) => {
           type: true,
           debt: true,
         },
-        orderBy: { name: 'asc' } 
+        orderBy: [
+          { name: 'asc' } // Sort by name, tapi kita akan sort manual untuk pastikan "Pelanggan Umum" pertama
+        ] 
       }),
       // Distributors: hanya untuk dropdown (biasanya tidak terlalu banyak)
+      // Include count produk untuk ditampilkan di Master Supplier
       prisma.distributor.findMany({ 
         select: {
           id: true,
           name: true,
+          address: true,
+          phone: true,
+          email: true,
+          contactPerson: true,
+          debt: true,
+          _count: {
+            select: {
+              products: true // Relasi melalui ProductDistributor
+            }
+          }
         },
         orderBy: { name: 'asc' } 
       }),
@@ -114,7 +134,7 @@ app.get('/api/bootstrap', async (req, res) => {
         id: true,
         sku: true,
         name: true,
-        distributorId: true,
+        // HAPUS: distributorId (tidak ada lagi, sekarang Many-to-Many)
         units: {
           select: {
             id: true,
@@ -160,7 +180,26 @@ app.get('/api/bootstrap', async (req, res) => {
         take: 10 // Limit POs untuk performa
       });
     
-    res.json({ customers, products, distributors, pendingPOs, warehouses });
+    // Sort customers: "Pelanggan Umum" selalu di posisi pertama
+    const sortedCustomers = [...customers].sort((a, b) => {
+      if (a.name === 'Pelanggan Umum') return -1;
+      if (b.name === 'Pelanggan Umum') return 1;
+      return a.name.localeCompare(b.name);
+    });
+    
+    // Map distributors untuk include productCount
+    const distributorsWithCount = distributors.map(dist => ({
+      id: dist.id,
+      name: dist.name,
+      address: dist.address,
+      phone: dist.phone,
+      email: dist.email,
+      contactPerson: dist.contactPerson,
+      debt: dist.debt,
+      productCount: dist._count.products
+    }));
+    
+    res.json({ customers: sortedCustomers, products, distributors: distributorsWithCount, pendingPOs, warehouses });
   } catch (error) {
     console.error('Bootstrap error:', error);
     res.status(500).json({ error: 'Gagal memuat data awal', details: error.message });

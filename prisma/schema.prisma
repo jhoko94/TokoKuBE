@@ -193,6 +193,7 @@ model Unit {
   name          String    // e.g., "Pcs", "Dus"
   price         Decimal   // Harga jual satuan ini
   conversion    Int       // e.g., 1 untuk Pcs, 40 untuk Dus
+  hasBarcode    Boolean   @default(false) // Penanda apakah satuan ini punya barcode
   // HAPUS: barcodes      String[]  // Array barcode
   // TAMBAH: Relasi ke Barcode
   barcodes      Barcode[] // Relasi ke Barcode

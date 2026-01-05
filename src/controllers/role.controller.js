@@ -1,5 +1,6 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const { addRoleToRoutes } = require('../utils/addRoleToRoutes');
 
 // GET /api/roles - Get all roles
 exports.getAllRoles = async (req, res) => {
@@ -124,8 +125,17 @@ exports.createRole = async (req, res) => {
       updatedAt: role.updatedAt
     };
 
+    // Otomatis tambahkan role baru ke semua route
+    try {
+      const result = addRoleToRoutes(role.code);
+      console.log(`✅ Role "${role.code}" telah ditambahkan ke ${result.filesUpdated} file route (${result.linesUpdated} baris)`);
+    } catch (error) {
+      console.error(`⚠️  Gagal menambahkan role "${role.code}" ke route:`, error.message);
+      // Jangan gagalkan response, hanya log warning
+    }
+
     res.status(201).json({ 
-      message: 'Role berhasil dibuat',
+      message: 'Role berhasil dibuat dan ditambahkan ke semua route',
       role: roleWithCount 
     });
   } catch (error) {
@@ -201,8 +211,19 @@ exports.updateRole = async (req, res) => {
       updatedAt: role.updatedAt
     };
 
+    // Jika code diubah, tambahkan role baru ke semua route
+    if (code && code.trim() !== existingRole.code) {
+      try {
+        const result = addRoleToRoutes(role.code);
+        console.log(`✅ Role "${role.code}" telah ditambahkan ke ${result.filesUpdated} file route (${result.linesUpdated} baris)`);
+      } catch (error) {
+        console.error(`⚠️  Gagal menambahkan role "${role.code}" ke route:`, error.message);
+        // Jangan gagalkan response, hanya log warning
+      }
+    }
+
     res.json({ 
-      message: 'Role berhasil diupdate',
+      message: 'Role berhasil diupdate' + (code && code.trim() !== existingRole.code ? ' dan ditambahkan ke semua route' : ''),
       role: roleWithCount 
     });
   } catch (error) {

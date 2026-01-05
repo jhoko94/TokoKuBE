@@ -221,6 +221,7 @@ exports.createProduct = async (req, res) => {
               name: unit.name.trim(),
               price: parseFloat(unit.price),
               conversion: parseInt(unit.conversion),
+              hasBarcode: unit.hasBarcode || false,
               // HAPUS: barcodes (sekarang melalui Barcode model)
             })),
           },
@@ -414,6 +415,7 @@ exports.updateProduct = async (req, res) => {
               name: unit.name.trim(),
               price: parseFloat(unit.price),
               conversion: parseInt(unit.conversion),
+              hasBarcode: unit.hasBarcode || false,
               // HAPUS: barcodes (sekarang melalui Barcode model)
             })),
           },

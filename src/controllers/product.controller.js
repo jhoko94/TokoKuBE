@@ -148,6 +148,63 @@ exports.getAllProducts = async (req, res) => {
   }
 };
 
+// GET /api/products/search-by-name?name=NAMA_PRODUK&distributorId=DISTRIBUTOR_ID
+// Mencari product dengan exact match nama + distributor (case-insensitive)
+// Jika distributorId tidak diberikan, cari berdasarkan nama saja
+exports.getProductByName = async (req, res) => {
+  try {
+    const { name, distributorId } = req.query;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Nama produk harus diisi' });
+    }
+    
+    // Build where clause
+    const whereClause = {
+      name: {
+        equals: name.trim().toUpperCase(),
+        mode: 'insensitive'
+      }
+    };
+    
+    // Jika distributorId diberikan, cari produk yang memiliki distributor tersebut
+    if (distributorId && distributorId.trim()) {
+      whereClause.distributors = {
+        some: {
+          distributorId: distributorId.trim()
+        }
+      };
+    }
+    
+    const product = await prisma.product.findFirst({
+      where: whereClause,
+      include: {
+        units: true,
+        distributors: {
+          include: {
+            distributor: {
+              select: { id: true, name: true }
+            }
+          }
+        }
+      }
+    });
+    
+    if (product) {
+      // Tambahkan properti distributor (default)
+      const defaultDistributor = product.distributors?.find(d => d.isDefault) || product.distributors?.[0];
+      const productResponse = {
+        ...product,
+        distributor: defaultDistributor?.distributor || null
+      };
+      res.json(productResponse);
+    } else {
+      res.status(404).json({ error: 'Produk tidak ditemukan' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mencari produk', details: error.message });
+  }
+};
+
 // POST /api/products (Master Barang - Buat Baru)
 exports.createProduct = async (req, res) => {
   const { sku, name, distributorId, distributors, minStock, units, brand, category, notes } = req.body;
@@ -397,10 +454,12 @@ exports.updateProduct = async (req, res) => {
   try {
     // Update dalam transaksi untuk handle ProductDistributor
     const updatedProduct = await prisma.$transaction(async (tx) => {
-      // 1. Hapus unit lama (Prisma tidak bisa update-or-delete nested, jadi kita hapus dulu)
-      await tx.unit.deleteMany({ where: { productId: id } });
+      // 1. Ambil unit yang sudah ada
+      const existingUnits = await tx.unit.findMany({
+        where: { productId: id }
+      });
 
-      // 2. Update produk dan buat unit baru
+      // 2. Update produk (tanpa units dulu)
       const product = await tx.product.update({
         where: { id },
         data: {
@@ -410,20 +469,46 @@ exports.updateProduct = async (req, res) => {
           brand,
           category,
           notes,
-          units: {
-            create: units.map(unit => ({
-              name: unit.name.trim(),
-              price: parseFloat(unit.price),
-              conversion: parseInt(unit.conversion),
-              hasBarcode: unit.hasBarcode || false,
-              // HAPUS: barcodes (sekarang melalui Barcode model)
-            })),
-          },
         },
         include: { units: true },
       });
 
-      // 3. Update ProductDistributor (Many-to-Many)
+      // 3. Merge units: update yang sudah ada, tambah yang baru
+      for (const newUnit of units) {
+        const unitName = newUnit.name.trim().toUpperCase();
+        const existingUnit = existingUnits.find(u => u.name.toUpperCase() === unitName);
+        
+        if (existingUnit) {
+          // Update unit yang sudah ada
+          await tx.unit.update({
+            where: { id: existingUnit.id },
+            data: {
+              price: parseFloat(newUnit.price),
+              conversion: parseInt(newUnit.conversion),
+              hasBarcode: newUnit.hasBarcode || false,
+            },
+          });
+        } else {
+          // Tambah unit baru
+          await tx.unit.create({
+            data: {
+              productId: id,
+              name: unitName,
+              price: parseFloat(newUnit.price),
+              conversion: parseInt(newUnit.conversion),
+              hasBarcode: newUnit.hasBarcode || false,
+            },
+          });
+        }
+      }
+
+      // 4. Fetch ulang product dengan units yang sudah diupdate
+      const productWithUnits = await tx.product.findUnique({
+        where: { id },
+        include: { units: true },
+      });
+
+      // 5. Update ProductDistributor (Many-to-Many)
       // Hapus semua ProductDistributor yang tidak ada di distributorsList
       const existingDistributorIds = existingProduct.distributors.map(d => d.distributorId);
       const newDistributorIds = distributorsList.map(d => d.distributorId);
@@ -511,12 +596,12 @@ exports.updateProduct = async (req, res) => {
               // Cari unit yang sesuai
               let targetUnit = null;
               if (unitId) {
-                targetUnit = product.units.find(u => u.id === unitId);
+                targetUnit = productWithUnits.units.find(u => u.id === unitId);
               }
               
               // Jika tidak ditemukan, gunakan unit dengan conversion = 1 (satuan kecil)
               if (!targetUnit) {
-                targetUnit = product.units.find(u => u.conversion === 1) || product.units[0];
+                targetUnit = productWithUnits.units.find(u => u.conversion === 1) || productWithUnits.units[0];
               }
               
               if (targetUnit) {
@@ -547,7 +632,7 @@ exports.updateProduct = async (req, res) => {
         }
       }
 
-      return product;
+      return productWithUnits;
     });
     
     // Fetch ulang produk dengan include distributors untuk menambahkan properti distributor

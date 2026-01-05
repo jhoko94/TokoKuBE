@@ -6,6 +6,9 @@ const { authenticate, authorize } = require('../middleware/auth.middleware');
 // (GET /api/products) - Ambil semua produk (Semua user bisa akses untuk melihat)
 router.get('/', authenticate, productController.getAllProducts);
 
+// (GET /api/products/search-by-name) - Cari product by exact name match
+router.get('/search-by-name', authenticate, productController.getProductByName);
+
 // (POST /api/products) - Buat produk baru (Master Barang) - Hanya ADMIN, MANAGER, dan TESTER
 router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PROG', 'TESTER'), productController.createProduct);
 

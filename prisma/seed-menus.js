@@ -39,7 +39,8 @@ async function main() {
     
     // User Management (hanya untuk ADMIN)
     { code: 'USER_MANAGEMENT', name: 'Manajemen User', path: '/user-management', icon: 'UserGroupIcon', category: 'AKUN', order: 2 },
-    { code: 'ROLE_MENU_MANAGEMENT', name: 'Manajemen Akses Menu', path: '/role-menu-management', icon: 'ShieldCheckIcon', category: 'AKUN', order: 3 },
+    { code: 'ROLE_MANAGEMENT', name: 'Manajemen Role', path: '/role-management', icon: 'UserCircleIcon', category: 'AKUN', order: 3 },
+    { code: 'ROLE_MENU_MANAGEMENT', name: 'Manajemen Akses Menu', path: '/role-menu-management', icon: 'ShieldCheckIcon', category: 'AKUN', order: 4 },
   ];
 
   for (const menuData of menus) {
@@ -95,7 +96,7 @@ async function main() {
   if (managerRole) {
     for (const menu of allMenus) {
       // Manager tidak bisa akses user management
-      const canAccess = !['USER_MANAGEMENT', 'ROLE_MENU_MANAGEMENT'].includes(menu.code);
+      const canAccess = !['USER_MANAGEMENT', 'ROLE_MANAGEMENT', 'ROLE_MENU_MANAGEMENT'].includes(menu.code);
       await prisma.roleMenuPermission.upsert({
         where: {
           roleId_menuId: {
@@ -144,7 +145,7 @@ async function main() {
     let testerMenuCount = 0;
     for (const menu of allMenus) {
       // Tester tidak bisa akses user management
-      const canAccess = !['USER_MANAGEMENT', 'ROLE_MENU_MANAGEMENT'].includes(menu.code);
+      const canAccess = !['USER_MANAGEMENT', 'ROLE_MANAGEMENT', 'ROLE_MENU_MANAGEMENT'].includes(menu.code);
       await prisma.roleMenuPermission.upsert({
         where: {
           roleId_menuId: {

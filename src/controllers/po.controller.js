@@ -120,7 +120,9 @@ exports.createPO = async (req, res) => {
 // POST /api/purchase-orders/:id/receive (Terima PO)
 exports.receivePO = async (req, res) => {
   const { id } = req.params;
-  const { newBarcodeData = {} } = req.body; // { [productId]: { [unitId]: 'barcode' } } - default ke object kosong
+  const { receivedQtys = {}, newBarcodeData = {} } = req.body; 
+  // receivedQtys: { [itemId]: receivedQty } - jumlah yang benar-benar datang
+  // newBarcodeData: { [productId]: { [unitId]: 'barcode' } } - barcode baru (opsional)
   
   try {
     const po = await prisma.purchaseOrder.findUnique({
@@ -154,7 +156,13 @@ exports.receivePO = async (req, res) => {
           continue;
         }
 
-        const stockToAdd = item.qty * unit.conversion;
+        // Gunakan receivedQty jika ada, jika tidak gunakan qty dari PO
+        const receivedQty = receivedQtys[item.id] !== undefined ? parseInt(receivedQtys[item.id]) : item.qty;
+        const poQty = item.qty;
+        const qtyDifference = receivedQty - poQty; // Selisih: positif = lebih, negatif = kurang
+
+        // Hitung stok yang ditambahkan berdasarkan jumlah yang datang
+        const stockToAdd = receivedQty * unit.conversion;
         const qtyBefore = product.stock;
         const qtyAfter = qtyBefore + stockToAdd;
 
@@ -192,7 +200,16 @@ exports.receivePO = async (req, res) => {
           data: { stock: { increment: stockToAdd } },
         });
 
-        // 4. Simpan riwayat stok
+        // 4. Simpan riwayat stok dengan catatan selisih jika ada
+        let note = `Penerimaan PO - ${po.distributor?.name || 'N/A'}`;
+        if (qtyDifference !== 0) {
+          if (qtyDifference > 0) {
+            note += ` (Lebih ${qtyDifference} ${item.unitName})`;
+          } else {
+            note += ` (Kurang ${Math.abs(qtyDifference)} ${item.unitName})`;
+          }
+        }
+        
         await tx.stockHistory.create({
           data: {
             productId: product.id,
@@ -201,7 +218,7 @@ exports.receivePO = async (req, res) => {
             qtyBefore,
             qtyAfter,
             unitName: item.unitName,
-            note: `Penerimaan PO - ${po.distributor?.name || 'N/A'}`,
+            note: note,
             referenceType: 'PO',
             referenceId: id,
           },

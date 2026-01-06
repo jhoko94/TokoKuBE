@@ -15,6 +15,7 @@
     "db:seed:products": "node prisma/seed-products-supplier.js",
     "db:clear-and-seed:products": "node prisma/clear-and-seed-products.js",
     "db:seed:menus": "node prisma/seed-menus.js",
+    "db:delete-menu-master-barang": "node prisma/delete-menu-master-barang.js",
     "add-role": "node scripts/add-role-to-routes.js",
     "railway:deploy": "prisma migrate resolve --applied 20251127003136_add_store_model || true && prisma migrate deploy && npm run db:seed && node src/index.js"
   },

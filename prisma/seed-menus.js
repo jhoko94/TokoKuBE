@@ -6,10 +6,9 @@ async function main() {
 
   const menus = [
     // Master Data
-    { code: 'MASTER_BARANG', name: 'Kelola Master Barang', path: '/master-barang', icon: 'PencilSquareIcon', category: 'MASTER_DATA', order: 1 },
-    { code: 'MASTER_BARANG_LIST', name: 'Master Barang', path: '/barang-master', icon: 'ArchiveBoxIcon', category: 'MASTER_DATA', order: 2 },
-    { code: 'MASTER_PELANGGAN', name: 'Master Pelanggan', path: '/master-pelanggan', icon: 'UserGroupIcon', category: 'MASTER_DATA', order: 3 },
-    { code: 'MASTER_SUPPLIER', name: 'Master Supplier', path: '/master-supplier', icon: 'BuildingStorefrontIcon', category: 'MASTER_DATA', order: 4 },
+    { code: 'MASTER_BARANG_LIST', name: 'Master Barang', path: '/barang-master', icon: 'ArchiveBoxIcon', category: 'MASTER_DATA', order: 1 },
+    { code: 'MASTER_PELANGGAN', name: 'Master Pelanggan', path: '/master-pelanggan', icon: 'UserGroupIcon', category: 'MASTER_DATA', order: 2 },
+    { code: 'MASTER_SUPPLIER', name: 'Master Supplier', path: '/master-supplier', icon: 'BuildingStorefrontIcon', category: 'MASTER_DATA', order: 3 },
     
     // Transaksi
     { code: 'PENJUALAN', name: 'Penjualan', path: '/', icon: 'ShoppingCartIcon', category: 'TRANSAKSI', order: 1 },
@@ -43,12 +42,33 @@ async function main() {
     { code: 'ROLE_MENU_MANAGEMENT', name: 'Manajemen Akses Menu', path: '/role-menu-management', icon: 'ShieldCheckIcon', category: 'AKUN', order: 4 },
   ];
 
+  // Upsert semua menu yang ada di array
   for (const menuData of menus) {
     await prisma.menu.upsert({
       where: { code: menuData.code },
       update: menuData,
       create: menuData
     });
+  }
+
+  // Hapus menu yang tidak ada di array (termasuk MASTER_BARANG)
+  const menuCodes = menus.map(m => m.code);
+  const allMenusInDb = await prisma.menu.findMany();
+  const menusToDelete = allMenusInDb.filter(m => !menuCodes.includes(m.code));
+  
+  if (menusToDelete.length > 0) {
+    console.log(`🗑️  Menghapus ${menusToDelete.length} menu yang tidak ada di daftar...`);
+    for (const menuToDelete of menusToDelete) {
+      // Hapus permissions terlebih dahulu
+      await prisma.roleMenuPermission.deleteMany({
+        where: { menuId: menuToDelete.id }
+      });
+      // Hapus menu
+      await prisma.menu.delete({
+        where: { id: menuToDelete.id }
+      });
+      console.log(`   ✅ Menu "${menuToDelete.name}" (${menuToDelete.code}) dihapus`);
+    }
   }
 
   console.log('✅ Menus created/updated');

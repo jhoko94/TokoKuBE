@@ -329,3 +329,58 @@ exports.receivePO = async (req, res) => {
     });
   }
 };
+
+// DELETE /api/purchase-orders/:id - Hapus/Batal PO
+exports.deletePO = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Cek apakah PO ada
+    const po = await prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: {
+        distributor: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                name: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!po) {
+      return res.status(404).json({ error: 'PO tidak ditemukan' });
+    }
+
+    // Validasi: hanya PO dengan status PENDING yang bisa dihapus
+    if (po.status !== 'PENDING') {
+      return res.status(400).json({ 
+        error: `PO dengan status ${po.status} tidak dapat dihapus. Hanya PO dengan status PENDING yang dapat dihapus.` 
+      });
+    }
+
+    // Hapus PO (akan cascade ke PurchaseOrderItem karena onDelete: Cascade)
+    await prisma.purchaseOrder.delete({
+      where: { id }
+    });
+
+    res.json({ 
+      message: 'PO berhasil dihapus',
+      deletedPO: {
+        id: po.id,
+        distributor: po.distributor?.name || 'N/A',
+        createdAt: po.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Error deletePO:', error);
+    res.status(500).json({ 
+      error: 'Gagal menghapus PO', 
+      details: error.message 
+    });
+  }
+};

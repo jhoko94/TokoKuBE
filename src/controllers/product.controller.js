@@ -724,11 +724,92 @@ exports.bulkDeleteProducts = async (req, res) => {
       return res.status(400).json({ error: 'Beberapa produk tidak ditemukan' });
     }
 
-    // Hapus semua produk yang valid
-    await prisma.product.deleteMany({
-      where: {
-        id: { in: ids }
+    // Cek apakah produk sudah digunakan dalam transaksi atau PO yang sudah COMPLETED
+    // PO dengan status PENDING tidak menghalangi penghapusan karena bisa dibatalkan
+    const [productsInTransactions, productsInCompletedPOs, productsInReturPenjualan, productsInReturPembelian] = await Promise.all([
+      prisma.transactionItem.findMany({
+        where: {
+          productId: { in: ids }
+        },
+        select: {
+          productId: true
+        }
+      }),
+      // Hanya cek PO yang sudah COMPLETED (sudah diterima)
+      prisma.purchaseOrderItem.findMany({
+        where: {
+          productId: { in: ids },
+          po: {
+            status: 'COMPLETED' // Hanya PO yang sudah diterima
+          }
+        },
+        select: {
+          productId: true
+        }
+      }),
+      prisma.returPenjualanItem.findMany({
+        where: {
+          productId: { in: ids }
+        },
+        select: {
+          productId: true
+        }
+      }),
+      prisma.returPembelianItem.findMany({
+        where: {
+          productId: { in: ids }
+        },
+        select: {
+          productId: true
+        }
+      })
+    ]);
+
+    // Gabungkan semua produk yang tidak bisa dihapus
+    const usedProductIds = new Set();
+    productsInTransactions.forEach(item => usedProductIds.add(item.productId));
+    productsInCompletedPOs.forEach(item => usedProductIds.add(item.productId));
+    productsInReturPenjualan.forEach(item => usedProductIds.add(item.productId));
+    productsInReturPembelian.forEach(item => usedProductIds.add(item.productId));
+
+    if (usedProductIds.size > 0) {
+      const usedProductNames = products
+        .filter(p => usedProductIds.has(p.id))
+        .map(p => p.name);
+      
+      return res.status(400).json({ 
+        error: 'Tidak dapat menghapus produk yang sudah digunakan dalam transaksi, PO, atau retur',
+        details: `Produk berikut tidak dapat dihapus: ${usedProductNames.join(', ')}`
+      });
+    }
+
+    // Hapus semua produk yang valid (menggunakan transaction untuk memastikan atomicity)
+    await prisma.$transaction(async (tx) => {
+      // Hapus ProductDistributorUnit terlebih dahulu (akan cascade dari ProductDistributor, tapi lebih aman)
+      const productDistributors = await tx.productDistributor.findMany({
+        where: {
+          productId: { in: ids }
+        },
+        select: {
+          id: true
+        }
+      });
+
+      if (productDistributors.length > 0) {
+        const productDistributorIds = productDistributors.map(pd => pd.id);
+        await tx.productDistributorUnit.deleteMany({
+          where: {
+            productDistributorId: { in: productDistributorIds }
+          }
+        });
       }
+
+      // Hapus produk (akan cascade ke ProductDistributor, Unit, Barcode, StockHistory, dll)
+      await tx.product.deleteMany({
+        where: {
+          id: { in: ids }
+        }
+      });
     });
 
     res.json({ 
@@ -736,6 +817,7 @@ exports.bulkDeleteProducts = async (req, res) => {
       deletedCount: products.length
     });
   } catch (error) {
+    console.error('Error bulk delete products:', error);
     res.status(500).json({ error: 'Gagal menghapus produk', details: error.message });
   }
 };

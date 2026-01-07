@@ -9,6 +9,10 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PROG', 'TESTER'), p
 // (POST /api/purchase-orders) - Buat PO baru (Pesan Barang) - Hanya ADMIN, MANAGER, dan TESTER
 router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PROG', 'TESTER'), poController.createPO);
 
+// (DELETE /api/purchase-orders/:id) - Hapus/Batal PO - Hanya ADMIN, MANAGER, dan TESTER
+// HARUS SEBELUM /:id/receive agar tidak tertangkap sebagai parameter
+router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PROG', 'TESTER'), poController.deletePO);
+
 // (POST /api/purchase-orders/:id/receive) - Terima PO (Cek Pesanan) - Hanya ADMIN, MANAGER, dan TESTER
 router.post('/:id/receive', authenticate, authorize('ADMIN', 'MANAGER', 'PROG', 'TESTER'), poController.receivePO);
 

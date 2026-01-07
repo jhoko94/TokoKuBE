@@ -189,30 +189,52 @@ exports.receivePO = async (req, res) => {
           });
         }
 
-        // 2. Update stok per supplier dan simpan harga beli jika ada
-        const updateData = { stock: { increment: stockToAdd } };
+        // 2. Update stok per supplier
+        await tx.productDistributor.update({
+          where: { id: productDistributor.id },
+          data: { stock: { increment: stockToAdd } }
+        });
         
-        // Simpan harga beli jika ada total harga dari invoice
-        // Harga beli disimpan per unit yang digunakan (misal: per liter, per pcs)
-        // Karena ProductDistributor bisa punya banyak Unit, kita simpan harga beli untuk unit yang digunakan saat ini
+        // 3. Simpan harga beli per unit jika ada total harga dari invoice
+        // Harga beli disimpan di ProductDistributorUnit untuk unit yang digunakan saat PO
+        let currentCostPrice = null; // Untuk digunakan di note
         if (invoiceTotalPrices && typeof invoiceTotalPrices === 'object' && invoiceTotalPrices[item.id]) {
           const invoiceTotalPrice = parseFloat(invoiceTotalPrices[item.id]);
           
           if (invoiceTotalPrice > 0 && receivedQty > 0) {
-            // Hitung harga beli per unit dalam satuan yang digunakan (misal: per liter, per pcs)
+            // Hitung harga beli per unit dalam satuan yang digunakan (misal: per liter, per pcs, per CTN)
             const costPricePerUnit = invoiceTotalPrice / receivedQty;
             
-            // Simpan harga beli (dalam satuan yang digunakan, bukan satuan terkecil)
-            // Catatan: Jika ada multiple unit untuk ProductDistributor yang sama,
-            // harga beli akan diupdate untuk unit terakhir yang digunakan
-            updateData.costPrice = costPricePerUnit;
+            // Ambil costPrice lama untuk perbandingan di note
+            const existingCostPrice = await tx.productDistributorUnit.findUnique({
+              where: {
+                productDistributorId_unitId: {
+                  productDistributorId: productDistributor.id,
+                  unitId: unit.id
+                }
+              }
+            });
+            currentCostPrice = existingCostPrice?.costPrice ? parseFloat(existingCostPrice.costPrice) : null;
+            
+            // Upsert ProductDistributorUnit untuk menyimpan costPrice per unit
+            await tx.productDistributorUnit.upsert({
+              where: {
+                productDistributorId_unitId: {
+                  productDistributorId: productDistributor.id,
+                  unitId: unit.id
+                }
+              },
+              update: {
+                costPrice: costPricePerUnit
+              },
+              create: {
+                productDistributorId: productDistributor.id,
+                unitId: unit.id,
+                costPrice: costPricePerUnit
+              }
+            });
           }
         }
-        
-        await tx.productDistributor.update({
-          where: { id: productDistributor.id },
-          data: updateData
-        });
 
         // 3. Sync stok total di Product
         await tx.product.update({
@@ -230,12 +252,20 @@ exports.receivePO = async (req, res) => {
           }
         }
         
-        // Tambahkan catatan harga beli jika ada
+        // Tambahkan catatan perubahan harga beli jika ada
         if (invoiceTotalPrices && typeof invoiceTotalPrices === 'object' && invoiceTotalPrices[item.id]) {
           const invoiceTotalPrice = parseFloat(invoiceTotalPrices[item.id]);
           if (invoiceTotalPrice > 0 && receivedQty > 0) {
-            const costPricePerUnit = invoiceTotalPrice / receivedQty;
-            note += ` (Harga beli: ${costPricePerUnit.toLocaleString('id-ID')} per ${item.unitName})`;
+            const newCostPrice = invoiceTotalPrice / receivedQty;
+            if (currentCostPrice && currentCostPrice > 0) {
+              // Ada harga beli lama, bandingkan
+              if (Math.abs(newCostPrice - currentCostPrice) > 0.01) { // Toleransi 0.01 untuk floating point
+                note += ` (Harga beli diupdate: ${currentCostPrice.toLocaleString('id-ID')} → ${newCostPrice.toLocaleString('id-ID')} per ${item.unitName})`;
+              }
+            } else {
+              // Tidak ada harga beli lama, ini harga beli baru
+              note += ` (Harga beli baru: ${newCostPrice.toLocaleString('id-ID')} per ${item.unitName})`;
+            }
           }
         }
         

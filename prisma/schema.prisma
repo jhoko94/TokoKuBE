@@ -165,15 +165,31 @@ model ProductDistributor {
   product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
   distributor   Distributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
   stock         Int         @default(0) // Stok per supplier
-  costPrice     Decimal?    // Harga beli per unit dari supplier ini (dalam satuan terkecil)
   isDefault     Boolean     @default(false) // Supplier utama
   barcodes      Barcode[]   // Barcode per supplier
+  unitCostPrices ProductDistributorUnit[] // Harga beli per unit
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   
   @@unique([productId, distributorId])
   @@index([productId])
   @@index([distributorId])
+}
+
+// TAMBAH: Junction table untuk menyimpan costPrice per ProductDistributor + Unit
+model ProductDistributorUnit {
+  id                  String            @id @default(cuid())
+  productDistributor  ProductDistributor @relation(fields: [productDistributorId], references: [id], onDelete: Cascade)
+  productDistributorId String
+  unit                Unit              @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  unitId              String
+  costPrice           Decimal            // Harga beli per unit ini dari supplier ini
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  
+  @@unique([productDistributorId, unitId])
+  @@index([productDistributorId])
+  @@index([unitId])
 }
 
 // TAMBAH: Model Barcode terikat dengan ProductDistributor
@@ -198,6 +214,7 @@ model Unit {
   // HAPUS: barcodes      String[]  // Array barcode
   // TAMBAH: Relasi ke Barcode
   barcodes      Barcode[] // Relasi ke Barcode
+  distributorCostPrices ProductDistributorUnit[] // Harga beli per distributor
 
   product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
   productId     String

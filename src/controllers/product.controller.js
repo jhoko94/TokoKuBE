@@ -103,12 +103,24 @@ exports.getAllProducts = async (req, res) => {
             productId: true,
             distributorId: true,
             stock: true,
-            costPrice: true,
             isDefault: true,
             distributor: {
               select: {
                 id: true,
                 name: true
+              }
+            },
+            unitCostPrices: {
+              select: {
+                id: true,
+                unitId: true,
+                costPrice: true,
+                unit: {
+                  select: {
+                    id: true,
+                    name: true
+                  }
+                }
               }
             },
             barcodes: {

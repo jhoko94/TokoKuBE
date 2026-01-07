@@ -56,6 +56,7 @@ const warehouseRoutes = require('./routes/warehouse.routes');
 const storeRoutes = require('./routes/store.routes');
 const menuRoutes = require('./routes/menu.routes');
 const roleRoutes = require('./routes/role.routes');
+const barcodeRoutes = require('./routes/barcode.routes');
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -74,6 +75,7 @@ app.use('/api/warehouses', warehouseRoutes);
 app.use('/api/store', storeRoutes);
 app.use('/api/menus', menuRoutes);
 app.use('/api/roles', roleRoutes);
+app.use('/api/barcodes', barcodeRoutes);
 
 // --- Endpoint Bootstrap (untuk memuat data awal FE) ---
 app.get('/api/bootstrap', async (req, res) => {

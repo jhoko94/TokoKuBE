@@ -9,6 +9,7 @@ async function main() {
     { code: 'MASTER_BARANG_LIST', name: 'Master Barang', path: '/barang-master', icon: 'ArchiveBoxIcon', category: 'MASTER_DATA', order: 1 },
     { code: 'MASTER_PELANGGAN', name: 'Master Pelanggan', path: '/master-pelanggan', icon: 'UserGroupIcon', category: 'MASTER_DATA', order: 2 },
     { code: 'MASTER_SUPPLIER', name: 'Master Supplier', path: '/master-supplier', icon: 'BuildingStorefrontIcon', category: 'MASTER_DATA', order: 3 },
+    { code: 'KELOLA_BARCODE', name: 'Kelola Barcode', path: '/kelola-barcode', icon: 'QrCodeIcon', category: 'MASTER_DATA', order: 4 },
     
     // Transaksi
     { code: 'PENJUALAN', name: 'Penjualan', path: '/', icon: 'ShoppingCartIcon', category: 'TRANSAKSI', order: 1 },

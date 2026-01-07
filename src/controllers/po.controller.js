@@ -120,9 +120,10 @@ exports.createPO = async (req, res) => {
 // POST /api/purchase-orders/:id/receive (Terima PO)
 exports.receivePO = async (req, res) => {
   const { id } = req.params;
-  const { receivedQtys = {}, newBarcodeData = {} } = req.body; 
+  const { receivedQtys = {}, newBarcodeData = {}, invoiceTotalPrices = {} } = req.body; 
   // receivedQtys: { [itemId]: receivedQty } - jumlah yang benar-benar datang
   // newBarcodeData: { [productId]: { [unitId]: 'barcode' } } - barcode baru (opsional)
+  // invoiceTotalPrices: { [itemId]: totalHarga } - total harga dari invoice (opsional)
   
   try {
     const po = await prisma.purchaseOrder.findUnique({
@@ -188,10 +189,29 @@ exports.receivePO = async (req, res) => {
           });
         }
 
-        // 2. Update stok per supplier
+        // 2. Update stok per supplier dan simpan harga beli jika ada
+        const updateData = { stock: { increment: stockToAdd } };
+        
+        // Simpan harga beli jika ada total harga dari invoice
+        // Harga beli disimpan per unit yang digunakan (misal: per liter, per pcs)
+        // Karena ProductDistributor bisa punya banyak Unit, kita simpan harga beli untuk unit yang digunakan saat ini
+        if (invoiceTotalPrices && typeof invoiceTotalPrices === 'object' && invoiceTotalPrices[item.id]) {
+          const invoiceTotalPrice = parseFloat(invoiceTotalPrices[item.id]);
+          
+          if (invoiceTotalPrice > 0 && receivedQty > 0) {
+            // Hitung harga beli per unit dalam satuan yang digunakan (misal: per liter, per pcs)
+            const costPricePerUnit = invoiceTotalPrice / receivedQty;
+            
+            // Simpan harga beli (dalam satuan yang digunakan, bukan satuan terkecil)
+            // Catatan: Jika ada multiple unit untuk ProductDistributor yang sama,
+            // harga beli akan diupdate untuk unit terakhir yang digunakan
+            updateData.costPrice = costPricePerUnit;
+          }
+        }
+        
         await tx.productDistributor.update({
           where: { id: productDistributor.id },
-          data: { stock: { increment: stockToAdd } }
+          data: updateData
         });
 
         // 3. Sync stok total di Product
@@ -200,13 +220,22 @@ exports.receivePO = async (req, res) => {
           data: { stock: { increment: stockToAdd } },
         });
 
-        // 4. Simpan riwayat stok dengan catatan selisih jika ada
+        // 4. Simpan riwayat stok dengan catatan selisih dan harga beli jika ada
         let note = `Penerimaan PO - ${po.distributor?.name || 'N/A'}`;
         if (qtyDifference !== 0) {
           if (qtyDifference > 0) {
             note += ` (Lebih ${qtyDifference} ${item.unitName})`;
           } else {
             note += ` (Kurang ${Math.abs(qtyDifference)} ${item.unitName})`;
+          }
+        }
+        
+        // Tambahkan catatan harga beli jika ada
+        if (invoiceTotalPrices && typeof invoiceTotalPrices === 'object' && invoiceTotalPrices[item.id]) {
+          const invoiceTotalPrice = parseFloat(invoiceTotalPrices[item.id]);
+          if (invoiceTotalPrice > 0 && receivedQty > 0) {
+            const costPricePerUnit = invoiceTotalPrice / receivedQty;
+            note += ` (Harga beli: ${costPricePerUnit.toLocaleString('id-ID')} per ${item.unitName})`;
           }
         }
         
@@ -224,7 +253,7 @@ exports.receivePO = async (req, res) => {
           },
         });
 
-        // 5. Simpan barcode baru (jika ada) - TERIKAT DENGAN SUPPLIER
+        // 6. Simpan barcode baru (jika ada) - TERIKAT DENGAN SUPPLIER
         if (newBarcodeData && typeof newBarcodeData === 'object' && newBarcodeData[product.id]) {
           const productBarcodes = newBarcodeData[product.id];
           if (productBarcodes && typeof productBarcodes === 'object') {

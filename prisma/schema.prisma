@@ -165,6 +165,7 @@ model ProductDistributor {
   product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
   distributor   Distributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
   stock         Int         @default(0) // Stok per supplier
+  costPrice     Decimal?    // Harga beli per unit dari supplier ini (dalam satuan terkecil)
   isDefault     Boolean     @default(false) // Supplier utama
   barcodes      Barcode[]   // Barcode per supplier
   createdAt     DateTime    @default(now())

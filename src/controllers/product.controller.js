@@ -98,7 +98,13 @@ exports.getAllProducts = async (req, res) => {
           }
         },
         distributors: {
-          include: {
+          select: {
+            id: true,
+            productId: true,
+            distributorId: true,
+            stock: true,
+            costPrice: true,
+            isDefault: true,
             distributor: {
               select: {
                 id: true,
@@ -106,7 +112,9 @@ exports.getAllProducts = async (req, res) => {
               }
             },
             barcodes: {
-              include: {
+              select: {
+                id: true,
+                barcode: true,
                 unit: {
                   select: {
                     id: true,
